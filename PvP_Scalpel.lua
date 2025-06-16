@@ -4,6 +4,8 @@ local function slugify(text)
     return text:lower():gsub("[ %p]", "-")
 end
 
+local curentPlayerName = UnitFullName("player");
+
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LEAVING_WORLD")
 
@@ -20,8 +22,6 @@ local function TryCaptureMatch()
         }
     }
     local now = date("%Y-%m-%d %H:%M:%S")
-
-    print("PvP Scalpel: Capturing match...")
 
     for i = 1, totalPlayers do
         local score = C_PvP.GetScoreInfo(i)
@@ -45,6 +45,19 @@ local function TryCaptureMatch()
                 deaths = score.deaths,
                 timestamp = now,
             }
+            
+            if curentPlayerName == playerName then
+                entry.isOwner = true,
+                local pvpTalents = C_SpecializationInfo.GetAllSelectedPvpTalentIDs();
+                entry.pvpTalents = pvpTalents;
+
+            else 
+                entry.isOwner = false;
+
+            end
+
+
+
         end
     end
 
