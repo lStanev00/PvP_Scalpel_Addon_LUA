@@ -5,7 +5,7 @@ SlashCmdList["SHIPNOW"] = function()
     print("Last Saved Match:")
     for _, p in ipairs(lastMatch) do
         print(string.format(
-            "👤 %s-%s | %s (%s) | ΔRating: %s",
+            "%s-%s | %s (%s) | ΔRating: %s",
             p.name, p.realm, p.spec or "?", p.class or "?", p.ratingChange or "N/A"
         ))
     end

@@ -13,7 +13,9 @@ local function TryCaptureMatch()
     local totalPlayers = GetNumBattlefieldScores()
     if totalPlayers == 0 then return end
 
-    local match = {}
+    local match = {
+        
+    }
     local instanceType = select(2, IsInInstance()) or "unknown"
     local now = date("%Y-%m-%d %H:%M:%S")
 
