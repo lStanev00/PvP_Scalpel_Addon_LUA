@@ -15,10 +15,10 @@ local function TryCaptureMatch()
 
     local match = {
         matchDetails = {
-            formatType = PvPScalpel_FormatChecker()
+            formatType = PvPScalpel_FormatChecker(),
+
         }
     }
-    local instanceType = select(2, IsInInstance()) or "unknown"
     local now = date("%Y-%m-%d %H:%M:%S")
 
     print("PvP Scalpel: Capturing match...")
@@ -35,46 +35,16 @@ local function TryCaptureMatch()
                 class = score.classToken,
                 spec = score.talentSpec,
                 faction = score.faction,
+                rating = score.rating,
                 ratingChange = score.ratingChange,
+                prematchMMR = score.prematchMMR,
+                postmatchMMR = score.postmatchMMR,
                 damage = score.damageDone,
                 healing = score.healingDone,
                 kills = score.killingBlows,
                 deaths = score.deaths,
-                matchType = instanceType,
                 timestamp = now,
-                stats = {}
             }
-
-            -- Copy custom stats (if any)
-            if score.stats then
-                for _, stat in ipairs(score.stats) do
-                    table.insert(entry.stats, {
-                        name = stat.name or "?",
-                        value = stat.pvpStatValue or 0
-                    })
-                end
-            end
-
-            table.insert(match, entry)
-
-            -- Print standard info
-            print(string.format(
-                " %s-%s | %s (%s) | ΔRating: %s |  %s |  %s |  %d/%d",
-                playerName, slugify(realm),
-                score.talentSpec or "?", score.classToken or "?",
-                score.ratingChange or "0",
-                BreakUpLargeNumbers(score.damageDone or 0),
-                BreakUpLargeNumbers(score.healingDone or 0),
-                score.killingBlows or 0,
-                score.deaths or 0
-            ))
-
-            -- Print extra stats
-            if score.stats then
-                for _, stat in ipairs(score.stats) do
-                    print(string.format(" %s: %s", stat.name or "?", stat.pvpStatValue or 0))
-                end
-            end
         end
     end
 
