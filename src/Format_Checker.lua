@@ -1,4 +1,4 @@
-local formatChecker =  function()
+function PvPScalpel_FormatChecker ()
     local ratedChecker = C_PvP.DoesMatchOutcomeAffectRating();
 
     if ratedChecker then

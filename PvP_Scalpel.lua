@@ -14,7 +14,9 @@ local function TryCaptureMatch()
     if totalPlayers == 0 then return end
 
     local match = {
-        
+        matchDetails = {
+            formatType = PvPScalpel_FormatChecker()
+        }
     }
     local instanceType = select(2, IsInInstance()) or "unknown"
     local now = date("%Y-%m-%d %H:%M:%S")
