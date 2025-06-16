@@ -1,0 +1,7 @@
+## Interface: 100207
+## Title: PvP Scalpel
+## Notes: Tracks PvP match results
+## Author: Lachezar Stanev
+## SavedVariables: PvP_Scalpel_DB
+
+PvP_Scalpel.lua
