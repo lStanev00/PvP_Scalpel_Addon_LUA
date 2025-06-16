@@ -17,7 +17,7 @@ local function TryCaptureMatch()
     local instanceType = select(2, IsInInstance()) or "unknown"
     local now = date("%Y-%m-%d %H:%M:%S")
 
-    print("🔍 PvP Scalpel: Capturing match...")
+    print("PvP Scalpel: Capturing match...")
 
     for i = 1, totalPlayers do
         local score = C_PvP.GetScoreInfo(i)
@@ -55,7 +55,7 @@ local function TryCaptureMatch()
 
             -- Print standard info
             print(string.format(
-                "👤 %s-%s | %s (%s) | ΔRating: %s |  %s |  %s |  %d/%d",
+                " %s-%s | %s (%s) | ΔRating: %s |  %s |  %s |  %d/%d",
                 playerName, slugify(realm),
                 score.talentSpec or "?", score.classToken or "?",
                 score.ratingChange or "0",
@@ -68,7 +68,7 @@ local function TryCaptureMatch()
             -- Print extra stats
             if score.stats then
                 for _, stat in ipairs(score.stats) do
-                    print(string.format("   📊 %s: %s", stat.name or "?", stat.pvpStatValue or 0))
+                    print(string.format(" %s: %s", stat.name or "?", stat.pvpStatValue or 0))
                 end
             end
         end
@@ -86,20 +86,3 @@ frame:SetScript("OnEvent", function(_, event)
         C_Timer.After(1, TryCaptureMatch)
     end
 end)
-
-SLASH_SHIPNOW1 = "/shipnow"
-SlashCmdList["SHIPNOW"] = function()
-    local lastMatch = PvP_Scalpel_DB[#PvP_Scalpel_DB]
-    if not lastMatch then
-        print("⚠️ No match data found.")
-        return
-    end
-
-    print("📦 Last Saved Match:")
-    for _, p in ipairs(lastMatch) do
-        print(string.format(
-            "👤 %s-%s | %s (%s) | ΔRating: %s",
-            p.name, p.realm, p.spec or "?", p.class or "?", p.ratingChange or "N/A"
-        ))
-    end
-end
