@@ -15,13 +15,14 @@ local function TryCaptureMatch()
     local totalPlayers = GetNumBattlefieldScores()
     if totalPlayers == 0 then return end
 
+    local now = date("%Y-%m-%d %H:%M:%S")
     local match = {
         matchDetails = {
             formatType = PvPScalpel_FormatChecker(),
+            timestamp = now,
 
         }
     }
-    local now = date("%Y-%m-%d %H:%M:%S")
 
     for i = 1, totalPlayers do
         local score = C_PvP.GetScoreInfo(i)
@@ -43,9 +44,8 @@ local function TryCaptureMatch()
                 healing = score.healingDone,
                 kills = score.killingBlows,
                 deaths = score.deaths,
-                timestamp = now,
             }
-            
+
             if curentPlayerName == playerName then
                 entry.isOwner = true,
                 local pvpTalents = C_SpecializationInfo.GetAllSelectedPvpTalentIDs();
@@ -55,8 +55,6 @@ local function TryCaptureMatch()
                 entry.isOwner = false;
 
             end
-
-
 
         end
     end
