@@ -47,7 +47,7 @@ local function TryCaptureMatch()
             }
 
             if curentPlayerName == playerName then
-                entry.isOwner = true,
+                entry.isOwner = true;
                 local pvpTalents = C_SpecializationInfo.GetAllSelectedPvpTalentIDs();
                 entry.pvpTalents = pvpTalents;
 
@@ -56,6 +56,7 @@ local function TryCaptureMatch()
 
             end
 
+            table.insert(match, entry);
         end
     end
 
