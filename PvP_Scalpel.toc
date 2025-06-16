@@ -5,4 +5,5 @@
 ## SavedVariables: PvP_Scalpel_DB
 
 src/Ship_Now.lua
+src/Format_Checker.lua
 PvP_Scalpel.lua
