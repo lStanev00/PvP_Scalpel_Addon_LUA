@@ -7,21 +7,20 @@ end
 local curentPlayerName = UnitFullName("player");
 
 local frame = CreateFrame("Frame")
-frame:RegisterEvent("PLAYER_LEAVING_WORLD")
+frame:RegisterEvent("PVP_MATCH_COMPLETE")
 
 local lastSavedMatchTime = nil
 
 local function TryCaptureMatch()
     local totalPlayers = GetNumBattlefieldScores()
     if totalPlayers == 0 then return end
-
+    
     local now = date("%Y-%m-%d %H:%M:%S")
     local match = {
         matchDetails = {
-            formatType = PvPScalpel_FormatChecker(),
             timestamp = now,
-
-        }
+        },
+        players = {}
     }
 
     for i = 1, totalPlayers do
@@ -44,31 +43,27 @@ local function TryCaptureMatch()
                 healing = score.healingDone,
                 kills = score.killingBlows,
                 deaths = score.deaths,
+                isOwner = (curentPlayerName == playerName),
             }
 
-            if curentPlayerName == playerName then
-                entry.isOwner = true;
-                local pvpTalents = C_SpecializationInfo.GetAllSelectedPvpTalentIDs();
-                entry.pvpTalents = pvpTalents;
-
-            else 
-                entry.isOwner = false;
-
+            if entry.isOwner then
+                local pvpTalents = C_SpecializationInfo.GetAllSelectedPvpTalentIDs()
+                entry.pvpTalents = pvpTalents
             end
 
-            table.insert(match, entry);
+            table.insert(match.players, entry)
         end
     end
 
-    if lastSavedMatchTime ~= now and #match > 0 then
+    if lastSavedMatchTime ~= now and #match.players > 0 then
         table.insert(PvP_Scalpel_DB, match)
         lastSavedMatchTime = now
-        print("PvP Scalpel: Match saved (" .. #match .. " players)")
+        print("PvP Scalpel: Match saved (" .. #match.players .. " players)")
     end
 end
 
 frame:SetScript("OnEvent", function(_, event)
-    if event == "PLAYER_LEAVING_WORLD" then
+    if event == "PVP_MATCH_COMPLETE" then
         C_Timer.After(1, TryCaptureMatch)
     end
 end)
