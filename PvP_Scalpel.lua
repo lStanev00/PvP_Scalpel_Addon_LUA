@@ -14,11 +14,18 @@ local lastSavedMatchTime = nil
 local function TryCaptureMatch()
     local totalPlayers = GetNumBattlefieldScores()
     if totalPlayers == 0 then return end
+
+    local uiMapID = C_Map.GetBestMapForUnit("player")
+    local mapInfo = C_Map.GetMapInfo(uiMapID)
+    local mapName = mapInfo and mapInfo.name
+
     
     local now = date("%Y-%m-%d %H:%M:%S")
     local match = {
         matchDetails = {
             timestamp = now,
+            format = PvPScalpel_FormatChecker(),
+            mapName = mapName
         },
         players = {}
     }
