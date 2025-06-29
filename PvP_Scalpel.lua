@@ -1,5 +1,4 @@
 PvP_Scalpel_DB = PvP_Scalpel_DB or {}
-local myGUID = UnitGUID("player")
 
 local function slugify(text)
     return text:lower():gsub("[ %p]", "-")
