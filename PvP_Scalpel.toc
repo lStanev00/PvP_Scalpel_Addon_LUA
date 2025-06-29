@@ -7,4 +7,5 @@
 src/Ship_Now.lua
 src/Format_Checker.lua
 src/Match_Length.lua
+src/Format_Checker.lua
 PvP_Scalpel.lua
