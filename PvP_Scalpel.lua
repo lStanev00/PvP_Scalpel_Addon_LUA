@@ -1,4 +1,5 @@
 PvP_Scalpel_DB = PvP_Scalpel_DB or {}
+local myGUID = UnitGUID("player")
 
 local function slugify(text)
     return text:lower():gsub("[ %p]", "-")
@@ -11,9 +12,16 @@ frame:RegisterEvent("PVP_MATCH_COMPLETE")
 
 local lastSavedMatchTime = nil
 
+local f = CreateFrame("Frame")
+f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+f:SetScript("OnEvent", PvP_Scalpel_SpellTracker)
+
+
 local function TryCaptureMatch()
     local totalPlayers = GetNumBattlefieldScores()
     if totalPlayers == 0 then return end
+
+
 
     local uiMapID = C_Map.GetBestMapForUnit("player")
     local mapInfo = C_Map.GetMapInfo(uiMapID)
@@ -62,6 +70,14 @@ local function TryCaptureMatch()
         end
     end
 
+    for _, entry in ipairs(match.players) do
+        entry.interrupts = interruptData[entry.name] or {}
+        entry.cc         = auraData[entry.name]   or {}
+    end
+    -- clear for next match—but also clear the saved tables:
+    wipe(interruptData)
+    wipe(auraData)
+
     if lastSavedMatchTime ~= now and #match.players > 0 then
         table.insert(PvP_Scalpel_DB, match)
         lastSavedMatchTime = now
@@ -72,68 +88,5 @@ end
 frame:SetScript("OnEvent", function(_, event)
     if event == "PVP_MATCH_COMPLETE" then
         C_Timer.After(1, TryCaptureMatch)
-    end
-end)
-
-local interruptData = {}
-local auraData      = {}
-local myGUID        = UnitGUID("player")
-
-local f = CreateFrame("Frame")
-f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-f:SetScript("OnEvent", function(_, event)
-    if event ~= "COMBAT_LOG_EVENT_UNFILTERED" then return end
-
-    -- grab everything into a table
-    local info = { CombatLogGetCurrentEventInfo() }
-    local subEvent = info[2]
-    local srcGUID  = info[4]
-    local srcName  = info[5]
-    local dstName  = info[9]
-
-    -- only track your own actions
-    if srcGUID ~= myGUID then return end
-
-    ----------------------------------------------------------------
-    -- 1) INTERRUPTS
-    -- SPELL_INTERRUPT layout:
-    --   [12]=spellID    [13]=spellName    [14]=spellSchool
-    --   [15]=extraSpellID [16]=extraSpellName [17]=extraSchool
-    if subEvent == "SPELL_INTERRUPT" then
-        local spellName      = info[13]
-        local extraSpellName = info[16]
-
-        print(("[KickTracker] %s used %s → interrupted %s’s %s"):format(
-            srcName, spellName, dstName, extraSpellName
-        ))
-
-        interruptData[srcName] = interruptData[srcName] or {}
-        local n = (interruptData[srcName][extraSpellName] or 0) + 1
-        interruptData[srcName][extraSpellName] = n
-
-        print(("[KickTracker] %s has interrupted %s %d time(s)"):format(
-            srcName, extraSpellName, n
-        ))
-        return
-    end
-
-    ----------------------------------------------------------------
-    -- 2) AURAS (CC / DEBUFF)
-    -- SPELL_AURA_APPLIED layout:
-    --   [12]=spellID    [13]=spellName    [14]=spellSchool
-    --   [15]=auraType
-    if subEvent == "SPELL_AURA_APPLIED" then
-        local spellName = info[13]
-        local auraType  = info[15]
-        if auraType == "DEBUFF" then
-            auraData[dstName] = auraData[dstName] or {}
-            local m = (auraData[dstName][spellName] or 0) + 1
-            auraData[dstName][spellName] = m
-
-            print(("[AuraTracker] %s applied %s to %s (%d)"):format(
-                srcName, spellName, dstName, m
-            ))
-        end
-        return
     end
 end)
