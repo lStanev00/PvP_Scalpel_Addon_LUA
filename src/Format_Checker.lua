@@ -33,6 +33,12 @@ function PvPScalpel_FormatChecker ()
         return "Random Battleground"
     end
 
+    local factionalChecker = C_PvP.IsMatchFactional();
+    if factionalChecker then
+        print("Factional Match = true")
+        return "Factional Match"
+    end
+
     return "Unknown Format"
 
 end
