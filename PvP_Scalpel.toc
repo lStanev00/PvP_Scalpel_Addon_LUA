@@ -1,4 +1,4 @@
-## Interface: 100207
+## Interface: 110107
 ## Title: PvP Scalpel
 ## Notes: Tracks PvP match results
 ## Author: Lachezar Stanev
@@ -7,5 +7,5 @@
 src/Ship_Now.lua
 src/Format_Checker.lua
 src/Match_Length.lua
-src/Format_Checker.lua
+src/Spell_Tracker.lua
 PvP_Scalpel.lua
