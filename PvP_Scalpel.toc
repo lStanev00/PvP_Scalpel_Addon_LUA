@@ -2,10 +2,9 @@
 ## Title: PvP Scalpel
 ## Notes: Tracks PvP match results
 ## Author: Lachezar Stanev
-## SavedVariables: PvP_Scalpel_DB, Aura_DB, Interrupt_DB
+## SavedVariables: PvP_Scalpel_DB
 
 src/Ship_Now.lua
 src/Format_Checker.lua
 src/Match_Length.lua
-src/Spell_Tracker.lua
 PvP_Scalpel.lua
