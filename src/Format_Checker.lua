@@ -36,3 +36,29 @@ function PvPScalpel_FormatChecker ()
     return "Unknown Format"
 
 end
+
+function split(input, delimiter)
+    local result = {}
+    for match in (input .. delimiter):gmatch("(.-)" .. delimiter) do
+        table.insert(result, match)
+    end
+    return result
+end
+
+function camelToKebab(str)
+    str = str:gsub("^[A-Z][a-z0-9]*", "")
+
+    local kebab = str:gsub("([A-Z])", "-%1"):lower()
+
+    kebab = kebab:gsub("^%-", "")
+
+    return kebab
+end
+
+function kebabToPascal(str)
+    return str:gsub("(^%l)", string.upper)
+              :gsub("-%l", function(match)
+                  return match:sub(2):upper()
+              end)
+end
+
