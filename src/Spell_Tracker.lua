@@ -1,17 +1,13 @@
-Interrupt_DB   = Interrupt_DB   or {}
-Aura_DB        = Aura_DB        or {}
-
-local interruptData = Interrupt_DB
-local auraData      = Aura_DB
-
 local myGUID = UnitGUID("player")
 
-function PvP_Scalpel_SpellTracker (_, event)
+function PvPScalpel_SpellTracker (_, event, auraData, interruptData)
     if event ~= "COMBAT_LOG_EVENT_UNFILTERED" then return end
 
     local checkInstance = PvPScalpel_FormatChecker();
     if checkInstance == "Unknown Format" then return end;
 
+    -- local pvpCheck = IsInActiveWorldPVP();
+    if pvpCheck == false then print("target's in pvp Zone!") end;
 
     -- grab everything into a table
     local info = { CombatLogGetCurrentEventInfo() }
