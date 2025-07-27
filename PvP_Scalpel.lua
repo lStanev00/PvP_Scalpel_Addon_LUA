@@ -117,6 +117,13 @@ local function TryCaptureMatch()
                 deaths = score.deaths,
                 isOwner = (curentPlayerName == playerName),
             }
+            
+            if entry.name == currentPlayerName then
+                print("[PvP Scalpel] MMR Change:")
+                print(entry.prematchMMR)
+                print(entry.postmatchMMR)
+            end
+
 
             if entry.isOwner then
                 local pvpTalents = C_SpecializationInfo.GetAllSelectedPvpTalentIDs()
