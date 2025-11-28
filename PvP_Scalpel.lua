@@ -77,12 +77,6 @@ local function TryCaptureMatch()
     local totalPlayers = GetNumBattlefieldScores()
     if totalPlayers == 0 then return end
 
-
-
-    -- local uiMapID = C_Map.GetBestMapForUnit("player")
-    -- local mapInfo = C_Map.GetMapInfo(uiMapID)
-    -- local mapName = mapInfo and mapInfo.name
-
     local mapName = GetRealZoneText();
     
     local now = date("%Y-%m-%d %H:%M:%S")
@@ -96,7 +90,8 @@ local function TryCaptureMatch()
     }
 
     for i = 1, totalPlayers do
-        local score = C_PvP.GetScoreInfo(i)
+        local score = C_PvP.GetScoreInfo(i);
+        local mapSpecificStats = PvPScalpel_GetMapStatsForIndex(i);
         if score then
             local playerName, realm = strsplit("-", score.name or "")
             realm = realm or GetRealmName()
@@ -115,13 +110,14 @@ local function TryCaptureMatch()
                 healing = score.healingDone,
                 kills = score.killingBlows,
                 deaths = score.deaths,
+                MSS = mapSpecificStats,
                 isOwner = (curentPlayerName == playerName),
             }
-            
-            if entry.name == currentPlayerName then
+            local isOwner = (curentPlayerName == playerName)
+            if isOwner then
                 print("[PvP Scalpel] MMR Change:")
-                print(entry.prematchMMR)
-                print(entry.postmatchMMR)
+                print("Pre-match MMR: ", entry.prematchMMR)
+                print("Post-match MMR: ", entry.postmatchMMR)
             end
 
 
