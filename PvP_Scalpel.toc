@@ -6,6 +6,7 @@
 ## LoadOnDemand: 0
 ## DefaultState: Enabled
 
+src/Scan_Cooldowns.lua
 src/Slugify.lua
 src/Format_Checker.lua
 src/Match_Length.lua
