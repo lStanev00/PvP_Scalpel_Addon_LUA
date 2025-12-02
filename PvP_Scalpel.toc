@@ -4,6 +4,7 @@
 ## Author: Lachezar Stanev
 ## SavedVariables: PvP_Scalpel_DB
 
+src/Slugify.lua
 src/Ship_Now.lua
 src/Format_Checker.lua
 src/Match_Length.lua
