@@ -1,4 +1,4 @@
-## Interface: 110107
+## Interface: 120000
 ## Title: PvP Scalpel
 ## Notes: Tracks PvP match results
 ## Author: Lachezar Stanev
