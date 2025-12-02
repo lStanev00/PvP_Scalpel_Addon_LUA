@@ -72,6 +72,13 @@ local function TryCaptureMatch()
     end
 end
 
+local cdFrame = CreateFrame("Frame")
+cdFrame:RegisterEvent("PLAYER_LOGIN")
+cdFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+cdFrame:SetScript("OnEvent", function()
+    PvPScalpel_ScanRealCooldowns()
+end)
+
 -- Frame to watch zoning/instance changes
 local zoneFrame = CreateFrame("Frame")
 zoneFrame:RegisterEvent("PLAYER_ENTERING_WORLD")

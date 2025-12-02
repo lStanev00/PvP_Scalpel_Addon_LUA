@@ -62,11 +62,3 @@ function PvPScalpel_ScanRealCooldowns()
         print(("|cffbb88ff[PvP Scalpel]|r %s (%d) – %.1fs"):format(d.name, spellID, d.cd))
     end
 end
-
-
-local cdFrame = CreateFrame("Frame")
-cdFrame:RegisterEvent("PLAYER_LOGIN")
-cdFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
-cdFrame:SetScript("OnEvent", function()
-    PvPScalpel_ScanRealCooldowns()
-end)
