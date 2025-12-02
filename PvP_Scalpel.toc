@@ -6,6 +6,7 @@
 ## LoadOnDemand: 0
 ## DefaultState: Enabled
 
+src/Slugify.lua
 src/Ship_Now.lua
 src/Format_Checker.lua
 src/Match_Length.lua
