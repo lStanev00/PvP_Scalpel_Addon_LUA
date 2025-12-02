@@ -1,4 +1,3 @@
-local isTracking = false
 local REAL_CD_MIN_MS = 30000
 local REAL_CD_MAX_MS = 360000   -- 6 minutes
 

@@ -1,5 +1,95 @@
 PvP_Scalpel_DB = PvP_Scalpel_DB or {}
 
+local currentTimeline = nil
+local timelineStart   = nil
+local currentMatchKey = nil  -- how you link to your match record (string or number)
+local isTracking = false;
+
+local function PvPScalpel_StartTimeline()
+    local function PvPScalpel_GenerateMatchKey()
+        return date("%Y%m%d_%H%M%S")
+    end
+
+    currentTimeline = {}
+    timelineStart   = GetTime()
+    currentMatchKey = PvPScalpel_GenerateMatchKey()
+end
+
+local function PvPScalpel_StopTimeline(match)
+    if not currentTimeline or not isTracking then return end
+    if not match then return end
+    match.timeline = currentTimeline
+
+    currentTimeline = nil
+    timelineStart   = nil
+    currentMatchKey = nil
+    return match
+end
+
+local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID)
+    if not currentTimeline or not timelineStart then return end
+    if unit ~= "player" then return end
+
+    local now = GetTime()
+
+    -- HP / Power
+    local hp, hpMax = UnitHealth("player"), UnitHealthMax("player")
+    local powerType = UnitPowerType("player")
+    local power     = UnitPower("player", powerType)
+    local powerMax  = UnitPowerMax("player", powerType)
+
+    local hpPct    = (hpMax and hpMax > 0) and (hp / hpMax) or nil
+    local powerPct = (powerMax and powerMax > 0) and (power / powerMax) or nil
+
+    -- PvP role (flag/orb/cart/assassin)
+    local classification = UnitPvPClassification("player")  -- may be nil
+
+    table.insert(currentTimeline, {
+        t       = now - timelineStart, -- seconds since match start
+        event   = eventType,           -- e.g. "SUCCEEDED", "FAILED"
+        spellID = spellID,
+        castGUID = castGUID,
+        hp      = hpPct,
+        power   = powerPct,
+        resourceType = powerType,
+        pvpRole = classification,
+    })
+end
+
+local spellFrame = CreateFrame("Frame")
+local function OnSpellEvent(self, event, unit, castGUID, spellID, ...)
+    if event == "UNIT_SPELLCAST_SUCCEEDED" then
+        PvPScalpel_RecordEvent("SUCCEEDED", unit, castGUID, spellID)
+    elseif event == "UNIT_SPELLCAST_START" then
+        PvPScalpel_RecordEvent("START", unit, castGUID, spellID)
+    elseif event == "UNIT_SPELLCAST_STOP" then
+        PvPScalpel_RecordEvent("STOP", unit, castGUID, spellID)
+    elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
+        PvPScalpel_RecordEvent("FAILED", unit, castGUID, spellID)
+    elseif event == "UNIT_SPELLCAST_INTERRUPTED" then
+        PvPScalpel_RecordEvent("INTERRUPTED", unit, castGUID, spellID)
+    elseif event == "UNIT_SPELLCAST_CHANNEL_START" then
+        PvPScalpel_RecordEvent("CHANNEL_START", unit, castGUID, spellID)
+    elseif event == "UNIT_SPELLCAST_CHANNEL_STOP" then
+        PvPScalpel_RecordEvent("CHANNEL_STOP", unit, castGUID, spellID)
+    end
+end
+
+local loader = CreateFrame("Frame")
+loader:RegisterEvent("PLAYER_LOGIN")
+loader:SetScript("OnEvent", function()
+    spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_START",        "player")
+    spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_STOP",         "player")
+    spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED",    "player")
+    spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_FAILED",       "player")
+    spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_FAILED_QUIET", "player")
+    spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED",  "player")
+    spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START","player")
+    spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", "player")
+    spellFrame:SetScript("OnEvent", OnSpellEvent)
+end)
+
+
 local myGUID = UnitGUID("player")
 local curentPlayerName = UnitFullName("player");
 
@@ -16,6 +106,7 @@ local function TryCaptureMatch()
     
     local now = date("%Y-%m-%d %H:%M:%S")
     local match = {
+        matchKey = currentMatchKey,
         matchDetails = {
             timestamp = now,
             format = PvPScalpel_FormatChecker(),
@@ -66,10 +157,14 @@ local function TryCaptureMatch()
     end
 
     if lastSavedMatchTime ~= now and #match.players > 0 then
+        match = PvPScalpel_StopTimeline(match)
         table.insert(PvP_Scalpel_DB, match)
         lastSavedMatchTime = now
         print("PvP Scalpel: Match saved (" .. #match.players .. " players)")
     end
+
+    isTracking = false
+
 end
 
 local cdFrame = CreateFrame("Frame")
@@ -85,11 +180,10 @@ zoneFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 zoneFrame:SetScript("OnEvent", function(self)
     local formatCheck = PvPScalpel_FormatChecker();
 
-    if formatCheck ~= "Unknown Format" then
+    if formatCheck ~= "Unknown Format" and not isTracking then
         -- Just entered a PvP instance
         isTracking = true
-        wipe(interruptData)
-        wipe(auraData)
+        PvPScalpel_StartTimeline()
         print(("PvPScalpel: Tracking ON (%s)"):format(formatCheck))
 
     end
