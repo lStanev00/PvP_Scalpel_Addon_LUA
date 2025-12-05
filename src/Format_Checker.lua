@@ -62,3 +62,6 @@ function kebabToPascal(str)
               end)
 end
 
+function Log(msg)
+    print("|cff00ff98[PvP Scalpel]|r " .. msg)
+end

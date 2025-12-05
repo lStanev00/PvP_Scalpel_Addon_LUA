@@ -1,14 +1,22 @@
 PvP_Scalpel_DB = PvP_Scalpel_DB or {}
 
+SLASH_PVPSCALPELRESET1 = "/pvpsreset"
+SlashCmdList["PVPSCALPELRESET"] = function()
+    PvP_Scalpel_DB = {}
+    Log("database wiped.")
+    C_UI.Reload()
+end
+
+
 local currentTimeline = nil
 local timelineStart   = nil
 local currentMatchKey = nil  -- how you link to your match record (string or number)
 local isTracking = false;
 
+local function PvPScalpel_GenerateMatchKey()
+    return date("%Y%m%d_%H%M%S")
+end
 local function PvPScalpel_StartTimeline()
-    local function PvPScalpel_GenerateMatchKey()
-        return date("%Y%m%d_%H%M%S")
-    end
 
     currentTimeline = {}
     timelineStart   = GetTime()
@@ -16,13 +24,18 @@ local function PvPScalpel_StartTimeline()
 end
 
 local function PvPScalpel_StopTimeline(match)
-    if not currentTimeline or not isTracking then return end
-    if not match then return end
+    if not currentTimeline then return match end
+
+    if not match then
+        match = { matchKey = currentMatchKey }
+    end
+
     match.timeline = currentTimeline
 
     currentTimeline = nil
     timelineStart   = nil
     currentMatchKey = nil
+
     return match
 end
 
@@ -32,29 +45,28 @@ local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID)
 
     local now = GetTime()
 
-    -- HP / Power
     local hp, hpMax = UnitHealth("player"), UnitHealthMax("player")
     local powerType = UnitPowerType("player")
     local power     = UnitPower("player", powerType)
     local powerMax  = UnitPowerMax("player", powerType)
 
-    local hpPct    = (hpMax and hpMax > 0) and (hp / hpMax) or nil
-    local powerPct = (powerMax and powerMax > 0) and (power / powerMax) or nil
+    local hpPct    = (hpMax  > 0) and (hp / hpMax) or nil
+    local powerPct = (powerMax > 0) and (power / powerMax) or nil
 
-    -- PvP role (flag/orb/cart/assassin)
-    local classification = UnitPvPClassification("player")  -- may be nil
+    local classification = UnitPvPClassification and UnitPvPClassification("player") or nil
 
     table.insert(currentTimeline, {
-        t       = now - timelineStart, -- seconds since match start
-        event   = eventType,           -- e.g. "SUCCEEDED", "FAILED"
+        t       = now - timelineStart,
+        event   = eventType,
         spellID = spellID,
-        castGUID = castGUID,
+        castGUID= castGUID,
         hp      = hpPct,
         power   = powerPct,
         resourceType = powerType,
         pvpRole = classification,
     })
 end
+
 
 local spellFrame = CreateFrame("Frame")
 local function OnSpellEvent(self, event, unit, castGUID, spellID, ...)
@@ -75,9 +87,10 @@ local function OnSpellEvent(self, event, unit, castGUID, spellID, ...)
     end
 end
 
-local loader = CreateFrame("Frame")
-loader:RegisterEvent("PLAYER_LOGIN")
-loader:SetScript("OnEvent", function()
+
+local function EnableSpellTracking()
+    Log("Enabling Spell Tracking...")
+    
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_START",        "player")
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_STOP",         "player")
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED",    "player")
@@ -86,15 +99,20 @@ loader:SetScript("OnEvent", function()
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED",  "player")
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START","player")
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", "player")
+    
     spellFrame:SetScript("OnEvent", OnSpellEvent)
-end)
+    Log("Spell Tracking ENABLED.")
+end
+
+local function DisableSpellTracking()
+    Log("Disabling Spell Tracking...")
+    spellFrame:UnregisterAllEvents()
+    Log("Spell Tracking DISABLED.")
+end
 
 
 local myGUID = UnitGUID("player")
 local curentPlayerName = UnitFullName("player");
-
-local frame = CreateFrame("Frame")
-frame:RegisterEvent("PVP_MATCH_COMPLETE")
 
 local lastSavedMatchTime = nil
 
@@ -177,22 +195,41 @@ end)
 -- Frame to watch zoning/instance changes
 local zoneFrame = CreateFrame("Frame")
 zoneFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+zoneFrame:RegisterEvent("PLAYER_LOGIN")
 zoneFrame:SetScript("OnEvent", function(self)
     local formatCheck = PvPScalpel_FormatChecker();
 
     if formatCheck ~= "Unknown Format" and not isTracking then
         -- Just entered a PvP instance
         isTracking = true
-        PvPScalpel_StartTimeline()
+        print(currentMatchKey)
         print(("PvPScalpel: Tracking ON (%s)"):format(formatCheck))
 
     end
 end)
 
+local pvpFrame = CreateFrame("Frame")
+pvpFrame:RegisterEvent("PVP_MATCH_COMPLETE")
+pvpFrame:RegisterEvent("PVP_MATCH_ACTIVE")
 -- local combatFrame = CreateFrame("Frame")
 -- combatFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-frame:SetScript("OnEvent", function(_, event)
-    if event == "PVP_MATCH_COMPLETE" then
-        C_Timer.After(1, TryCaptureMatch)
+pvpFrame:SetScript("OnEvent", function(_, event, ...)
+    if event == "PVP_MATCH_ACTIVE" then
+        Log("PVP MATCH ACTIVE detected.")
+        PvPScalpel_StartTimeline()
+        EnableSpellTracking()
+        Log("Timeline STARTED for new match.")
+
+    elseif event == "PVP_MATCH_COMPLETE" then
+        local winner, duration = ...
+        Log(string.format("PVP MATCH COMPLETE. Winner: %s | Duration: %s", tostring(winner), tostring(duration)))
+
+        DisableSpellTracking()
+
+        C_Timer.After(0.5, function()
+            Log("Capturing match summary...")
+            TryCaptureMatch()
+            Log("Match record saved.")
+        end)
     end
 end)

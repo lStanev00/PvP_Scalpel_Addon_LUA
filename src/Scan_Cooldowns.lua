@@ -56,8 +56,8 @@ function PvPScalpel_ScanRealCooldowns()
         end
     end
 
-    print("|cffbb88ff[PvP Scalpel]|r Combat cooldowns detected:")
-    for spellID, d in pairs(PvPScalpel_RealCooldownsByID) do
-        print(("|cffbb88ff[PvP Scalpel]|r %s (%d) – %.1fs"):format(d.name, spellID, d.cd))
-    end
+    -- print("|cffbb88ff[PvP Scalpel]|r Combat cooldowns detected:")
+    -- for spellID, d in pairs(PvPScalpel_RealCooldownsByID) do
+    --     print(("|cffbb88ff[PvP Scalpel]|r %s (%d) – %.1fs"):format(d.name, spellID, d.cd))
+    -- end
 end
