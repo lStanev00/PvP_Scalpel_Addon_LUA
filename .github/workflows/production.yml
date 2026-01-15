@@ -1,0 +1,69 @@
+name: Publish Addon to S3
+
+on:
+  push:
+    branches:
+      - production
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
+      AWS_S3_BUCKET_NAME: ${{ secrets.AWS_S3_BUCKET_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Build addon zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          zip -r dist/PvP_Scalpel.zip src PvP_Scalpel.lua PvP_Scalpel.toc
+
+      - name: Upload zip to S3
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint_args=()
+          if [ -n "${AWS_ENDPOINT_URL:-}" ]; then
+            endpoint_args+=(--endpoint-url "$AWS_ENDPOINT_URL")
+          fi
+          aws "${endpoint_args[@]}" s3 cp dist/PvP_Scalpel.zip "s3://${AWS_S3_BUCKET_NAME}/Addon/PvP_Scalpel.zip"
+
+      - name: Update manifest.json version
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint_args=()
+          if [ -n "${AWS_ENDPOINT_URL:-}" ]; then
+            endpoint_args+=(--endpoint-url "$AWS_ENDPOINT_URL")
+          fi
+          addon_version=$(rg -m 1 "^## Version:" PvP_Scalpel.toc | sed -E 's/^## Version:[[:space:]]*//')
+          if aws "${endpoint_args[@]}" s3api head-object --bucket "$AWS_S3_BUCKET_NAME" --key "manifest.json" >/dev/null 2>&1; then
+            aws "${endpoint_args[@]}" s3 cp "s3://${AWS_S3_BUCKET_NAME}/manifest.json" manifest.json
+          else
+            echo "{}" > manifest.json
+          fi
+          ADDON_VERSION="$addon_version" python - <<'PY'
+          import json
+          import os
+
+          path = "manifest.json"
+          with open(path, "r", encoding="utf-8") as handle:
+              data = json.load(handle)
+          data["addon"] = os.environ["ADDON_VERSION"]
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(data, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          PY
+          aws "${endpoint_args[@]}" s3 cp manifest.json "s3://${AWS_S3_BUCKET_NAME}/manifest.json"
