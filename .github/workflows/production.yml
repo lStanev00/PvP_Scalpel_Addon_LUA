@@ -43,7 +43,7 @@ jobs:
           if [ -n "${AWS_ENDPOINT_URL:-}" ]; then
             endpoint_args+=(--endpoint-url "$AWS_ENDPOINT_URL")
           fi
-          addon_version=$(rg -m 1 "^## Version:" PvP_Scalpel.toc | sed -E 's/^## Version:[[:space:]]*//')
+          addon_version=$(grep -m 1 "^## Version:" PvP_Scalpel.toc | sed -E 's/^## Version:[[:space:]]*//')
           if aws "${endpoint_args[@]}" s3api head-object --bucket "$AWS_S3_BUCKET_NAME" --key "manifest.json" >/dev/null 2>&1; then
             aws "${endpoint_args[@]}" s3 cp "s3://${AWS_S3_BUCKET_NAME}/manifest.json" manifest.json
           else
