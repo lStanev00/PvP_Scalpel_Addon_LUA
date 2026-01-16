@@ -87,8 +87,21 @@ jobs:
           print(json.dumps(data))
           PY
           )
-          curl -sSf -X POST "$CDN_MANIFEST_URL" \
+          echo "Posting manifest to backend..."
+          echo "URL: $CDN_MANIFEST_URL"
+          echo "Payload: $payload"
+          http_code=$(curl -sS -o response.json -w "%{http_code}" -X POST "$CDN_MANIFEST_URL" \
             -H "Authorization: Bearer $JWT_CDN_PUBLIC" \
             -H "600: BasicPass" \
             -H "Content-Type: application/json" \
-            -d "$payload"
+            -d "$payload" || true)
+          echo "Response status: $http_code"
+          if [ -s response.json ]; then
+            echo "Response body:"
+            cat response.json
+          else
+            echo "Response body: (empty)"
+          fi
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            exit 1
+          fi
