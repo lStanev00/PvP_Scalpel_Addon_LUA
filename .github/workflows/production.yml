@@ -14,6 +14,8 @@ jobs:
       AWS_S3_BUCKET_NAME: ${{ secrets.AWS_S3_BUCKET_NAME }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      CDN_MANIFEST_URL: ${{ secrets.CDN_MANIFEST_URL }}
+      JWT_CDN_PUBLIC: ${{ secrets.JWT_CDN_PUBLIC }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,3 +64,31 @@ jobs:
               handle.write("\n")
           PY
           aws "${endpoint_args[@]}" s3 cp manifest.json "s3://${AWS_S3_BUCKET_NAME}/manifest.json"
+
+      - name: Post manifest to backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CDN_MANIFEST_URL:-}" ]; then
+            echo "CDN_MANIFEST_URL is empty" >&2
+            exit 1
+          fi
+          addon_version=$(grep -m 1 "^## Version:" PvP_Scalpel.toc | sed -E 's/^## Version:[[:space:]]*//')
+          payload=$(
+            ADDON_VERSION="$addon_version" ADDON_PATH="Addon/PvP_Scalpel.zip" python - <<'PY'
+          import json
+          import os
+
+          data = {
+              "customId": "addon",
+              "version": os.environ["ADDON_VERSION"],
+              "path": os.environ["ADDON_PATH"],
+          }
+          print(json.dumps(data))
+          PY
+          )
+          curl -sSf -X POST "$CDN_MANIFEST_URL" \
+            -H "Authorization: Bearer $JWT_CDN_PUBLIC" \
+            -H "600: BasicPass" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
