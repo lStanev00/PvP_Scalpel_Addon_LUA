@@ -14,10 +14,6 @@ jobs:
       AWS_S3_BUCKET_NAME: ${{ secrets.AWS_S3_BUCKET_NAME }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      CDN_MANIFEST_URL: ${{ secrets.CDN_MANIFEST_URL }}
-      CDN_WRITE_TOKEN: ${{ secrets.JWT_CDN_PUBLIC }}
-      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,58 +49,19 @@ jobs:
           else
             echo "{}" > manifest.json
           fi
-          ADDON_VERSION="$addon_version" python - <<'PY'
+          ADDON_VERSION="$addon_version" ADDON_PATH="Addon/PvP_Scalpel.zip" python - <<'PY'
           import json
           import os
 
           path = "manifest.json"
           with open(path, "r", encoding="utf-8") as handle:
               data = json.load(handle)
-          data["addon"] = os.environ["ADDON_VERSION"]
+          data["addon"] = {
+              "version": os.environ["ADDON_VERSION"],
+              "path": os.environ["ADDON_PATH"],
+          }
           with open(path, "w", encoding="utf-8") as handle:
               json.dump(data, handle, indent=2, sort_keys=True)
               handle.write("\n")
           PY
           aws "${endpoint_args[@]}" s3 cp manifest.json "s3://${AWS_S3_BUCKET_NAME}/manifest.json"
-
-      - name: Post manifest to backend
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -z "${CDN_MANIFEST_URL:-}" ]; then
-            echo "CDN_MANIFEST_URL is empty" >&2
-            exit 1
-          fi
-          addon_version=$(grep -m 1 "^## Version:" PvP_Scalpel.toc | sed -E 's/^## Version:[[:space:]]*//')
-          payload=$(
-            ADDON_VERSION="$addon_version" ADDON_PATH="Addon/PvP_Scalpel.zip" python - <<'PY'
-          import json
-          import os
-
-          data = {
-              "customId": "addon",
-              "version": os.environ["ADDON_VERSION"],
-              "path": os.environ["ADDON_PATH"],
-          }
-          print(json.dumps(data))
-          PY
-          )
-          echo "Posting manifest to backend..."
-          echo "URL: $CDN_MANIFEST_URL"
-          echo "Payload: $payload"
-          http_code=$(curl -sS --fail --max-time 15 --connect-timeout 10 -o response.json -w "%{http_code}" -X POST "$CDN_MANIFEST_URL" \
-            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-            -H "Authorization: Bearer $CDN_WRITE_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$payload" || true)
-          echo "Response status: $http_code"
-          if [ -s response.json ]; then
-            echo "Response body:"
-            cat response.json
-          else
-            echo "Response body: (empty)"
-          fi
-          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-            exit 1
-          fi
