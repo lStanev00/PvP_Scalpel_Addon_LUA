@@ -39,6 +39,177 @@ local function PvPScalpel_StopTimeline(match)
     return match
 end
 
+local soloShuffleState = {
+    active = false,
+    rounds = {},
+    currentRound = nil,
+    currentRoundIndex = 0,
+    currentRoundStart = nil,
+    lastMatchState = nil,
+    notes = {},
+    saved = false,
+}
+
+local function PvPScalpel_IsRatedSoloShuffle()
+    return C_PvP and C_PvP.IsRatedSoloShuffle and C_PvP.IsRatedSoloShuffle()
+end
+
+local function PvPScalpel_SoloShuffleNote(msg)
+    if not soloShuffleState.notes then
+        soloShuffleState.notes = {}
+    end
+    table.insert(soloShuffleState.notes, msg)
+end
+
+local function PvPScalpel_ResetSoloShuffleState()
+    soloShuffleState.active = false
+    soloShuffleState.rounds = {}
+    soloShuffleState.currentRound = nil
+    soloShuffleState.currentRoundIndex = 0
+    soloShuffleState.currentRoundStart = nil
+    soloShuffleState.lastMatchState = nil
+    soloShuffleState.notes = {}
+    soloShuffleState.saved = false
+end
+
+local function PvPScalpel_StartSoloShuffleSession()
+    PvPScalpel_ResetSoloShuffleState()
+    soloShuffleState.active = true
+end
+
+local function PvPScalpel_StartSoloShuffleRound()
+    if not soloShuffleState.active then return end
+    if soloShuffleState.currentRound then return end
+
+    if soloShuffleState.currentRoundIndex >= 6 then
+        PvPScalpel_SoloShuffleNote("round_start_after_expected_count")
+        return
+    end
+
+    soloShuffleState.currentRoundIndex = soloShuffleState.currentRoundIndex + 1
+    local now = GetTime()
+    local round = {
+        roundIndex = soloShuffleState.currentRoundIndex,
+        stateStartTime = now,
+        timeline = {},
+    }
+    soloShuffleState.currentRound = round
+    soloShuffleState.currentRoundStart = now
+    table.insert(soloShuffleState.rounds, round)
+end
+
+local function PvPScalpel_BuildScoreSnapshot()
+    local totalPlayers = GetNumBattlefieldScores()
+    if totalPlayers == 0 then
+        return nil, "scoreboard_empty"
+    end
+
+    local statColumns = {}
+    if C_PvP and C_PvP.GetMatchPVPStatColumns then
+        statColumns = C_PvP.GetMatchPVPStatColumns() or {}
+    end
+
+    local players = {}
+    for i = 1, totalPlayers do
+        local score = C_PvP.GetScoreInfo(i)
+        if score then
+            local playerName, realm = strsplit("-", score.name or "")
+            realm = realm or GetRealmName()
+            local statValues = {}
+            if score.stats then
+                for _, s in ipairs(score.stats) do
+                    table.insert(statValues, {
+                        pvpStatID = s.pvpStatID,
+                        pvpStatValue = s.pvpStatValue,
+                    })
+                end
+            end
+
+            table.insert(players, {
+                name = playerName,
+                realm = slugify(realm),
+                classToken = score.classToken,
+                talentSpec = score.talentSpec,
+                faction = score.faction,
+                rating = score.rating,
+                ratingChange = score.ratingChange,
+                prematchMMR = score.prematchMMR,
+                postmatchMMR = score.postmatchMMR,
+                damageDone = score.damageDone,
+                healingDone = score.healingDone,
+                killingBlows = score.killingBlows,
+                deaths = score.deaths,
+                stats = statValues,
+            })
+        else
+            PvPScalpel_SoloShuffleNote("nil_score_entry_" .. tostring(i))
+        end
+    end
+
+    return {
+        statColumns = statColumns,
+        players = players,
+    }
+end
+
+local function PvPScalpel_EndSoloShuffleRound()
+    if not soloShuffleState.active then return end
+
+    local round = soloShuffleState.currentRound
+    if not round then
+        PvPScalpel_SoloShuffleNote("postround_without_active_round")
+        return
+    end
+
+    local now = GetTime()
+    round.stateEndTime = now
+    round.duration = now - (round.stateStartTime or now)
+
+    local snapshot, snapshotNote = PvPScalpel_BuildScoreSnapshot()
+    if snapshot then
+        round.scoreSnapshot = snapshot
+    else
+        PvPScalpel_SoloShuffleNote(snapshotNote or "round_snapshot_unavailable")
+    end
+
+    round.outcome = {
+        result = "unknown",
+        reason = "Per-round winner not exposed via safe APIs",
+    }
+
+    soloShuffleState.currentRound = nil
+    soloShuffleState.currentRoundStart = nil
+end
+
+local function PvPScalpel_HandleSoloShuffleStateChange()
+    if not soloShuffleState.active then return end
+    if not (C_PvP and C_PvP.GetActiveMatchState) then
+        PvPScalpel_SoloShuffleNote("match_state_unavailable")
+        return
+    end
+
+    local state = C_PvP.GetActiveMatchState()
+    if state == soloShuffleState.lastMatchState then
+        return
+    end
+    soloShuffleState.lastMatchState = state
+
+    if Enum and Enum.PvPMatchState then
+        if state == Enum.PvPMatchState.Engaged then
+            PvPScalpel_StartSoloShuffleRound()
+        elseif state == Enum.PvPMatchState.PostRound then
+            PvPScalpel_EndSoloShuffleRound()
+        elseif state == Enum.PvPMatchState.Complete then
+            if soloShuffleState.currentRound then
+                PvPScalpel_EndSoloShuffleRound()
+                PvPScalpel_SoloShuffleNote("forced_round_end_on_complete")
+            end
+        end
+    else
+        PvPScalpel_SoloShuffleNote("enum_pvp_match_state_unavailable")
+    end
+end
+
 local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID)
     if not currentTimeline or not timelineStart then return end
     if unit ~= "player" then return end
@@ -65,6 +236,19 @@ local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID)
         resourceType = powerType,
         pvpRole = classification,
     })
+
+    if soloShuffleState.active and soloShuffleState.currentRound and soloShuffleState.currentRoundStart then
+        table.insert(soloShuffleState.currentRound.timeline, {
+            t       = now - soloShuffleState.currentRoundStart,
+            event   = eventType,
+            spellID = spellID,
+            castGUID= castGUID,
+            hp      = hpPct,
+            power   = powerPct,
+            resourceType = powerType,
+            pvpRole = classification,
+        })
+    end
 end
 
 
@@ -115,6 +299,138 @@ local myGUID = UnitGUID("player")
 local curentPlayerName = UnitFullName("player");
 
 local lastSavedMatchTime = nil
+
+local function PvPScalpel_BuildSoloShufflePlayers()
+    local totalPlayers = GetNumBattlefieldScores()
+    if totalPlayers == 0 then
+        return {}
+    end
+
+    local players = {}
+    for i = 1, totalPlayers do
+        local score = C_PvP.GetScoreInfo(i)
+        if score then
+            local playerName, realm = strsplit("-", score.name or "")
+            realm = realm or GetRealmName()
+
+            local entry = {
+                name = playerName,
+                realm = slugify(realm),
+                class = score.classToken,
+                spec = score.talentSpec,
+                faction = score.faction,
+                rating = score.rating,
+                ratingChange = score.ratingChange,
+                prematchMMR = score.prematchMMR,
+                postmatchMMR = score.postmatchMMR,
+                damage = score.damageDone,
+                healing = score.healingDone,
+                kills = score.killingBlows,
+                deaths = score.deaths,
+                MSS = PvPScalpel_GetMapStatsForIndex(i),
+                isOwner = (curentPlayerName == playerName),
+            }
+
+            if entry.isOwner then
+                local pvpTalents = C_SpecializationInfo.GetAllSelectedPvpTalentIDs()
+                entry.pvpTalents = pvpTalents
+            end
+
+            table.insert(players, entry)
+        else
+            PvPScalpel_SoloShuffleNote("nil_score_entry_" .. tostring(i))
+        end
+    end
+
+    return players
+end
+
+local function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
+    if soloShuffleState.saved then return end
+
+    attempt = attempt or 1
+    local totalPlayers = GetNumBattlefieldScores()
+    local statColumns = {}
+    if C_PvP and C_PvP.GetMatchPVPStatColumns then
+        statColumns = C_PvP.GetMatchPVPStatColumns() or {}
+    end
+
+    local scoreboardReady = (totalPlayers > 0)
+    if not scoreboardReady and attempt <= 10 then
+        C_Timer.After(0.3, function()
+            PvPScalpel_FinalizeSoloShuffleMatch(attempt + 1)
+        end)
+        return
+    end
+
+    if not scoreboardReady then
+        PvPScalpel_SoloShuffleNote("scoreboard_unavailable_after_retries")
+    end
+
+    local mapName = GetRealZoneText()
+    local now = date("%Y-%m-%d %H:%M:%S")
+
+    local match = {
+        matchKey = currentMatchKey,
+        matchDetails = {
+            timestamp = now,
+            format = PvPScalpel_FormatChecker(),
+            mapName = mapName
+        },
+        players = PvPScalpel_BuildSoloShufflePlayers(),
+    }
+
+    match = PvPScalpel_StopTimeline(match)
+
+    local playerGuid = GetPlayerGuid and GetPlayerGuid() or UnitGUID("player")
+    local localPlayerScore = playerGuid and C_PvP.GetScoreInfoByPlayerGuid and C_PvP.GetScoreInfoByPlayerGuid(playerGuid) or nil
+
+    local matchSummarySnapshot = nil
+    if scoreboardReady then
+        local snapshot = PvPScalpel_BuildScoreSnapshot()
+        if snapshot then
+            matchSummarySnapshot = snapshot
+            matchSummarySnapshot.statColumns = statColumns
+        end
+    end
+
+    local roundsCaptured = #soloShuffleState.rounds
+    local integrityNotes = soloShuffleState.notes or {}
+
+    match.soloShuffle = {
+        matchKey = currentMatchKey,
+        timestamp = now,
+        format = "Solo Shuffle",
+        mapName = mapName,
+        duration = C_PvP.GetActiveMatchDuration and C_PvP.GetActiveMatchDuration() or 0,
+        roundsExpected = 6,
+        roundsCaptured = roundsCaptured,
+        timeline = match.timeline,
+        rounds = soloShuffleState.rounds,
+        matchSummary = {
+            statColumns = matchSummarySnapshot and matchSummarySnapshot.statColumns or {},
+            players = matchSummarySnapshot and matchSummarySnapshot.players or {},
+            ratingChange = localPlayerScore and localPlayerScore.ratingChange or 0,
+            prematchMMR = localPlayerScore and localPlayerScore.prematchMMR or 0,
+            postmatchMMR = localPlayerScore and localPlayerScore.postmatchMMR or 0,
+        },
+        integrity = {
+            scoreboardComplete = scoreboardReady and totalPlayers > 0,
+            timelineComplete = match.timeline ~= nil,
+            roundsComplete = roundsCaptured == 6,
+            notes = integrityNotes,
+        }
+    }
+
+    if lastSavedMatchTime ~= now then
+        table.insert(PvP_Scalpel_DB, match)
+        lastSavedMatchTime = now
+        soloShuffleState.saved = true
+        print("PvP Scalpel: Solo Shuffle match saved (" .. tostring(roundsCaptured) .. " rounds)")
+    else
+        PvPScalpel_SoloShuffleNote("duplicate_match_timestamp")
+    end
+end
 
 local function TryCaptureMatch()
     local totalPlayers = GetNumBattlefieldScores()
@@ -211,6 +527,7 @@ end)
 local pvpFrame = CreateFrame("Frame")
 pvpFrame:RegisterEvent("PVP_MATCH_COMPLETE")
 pvpFrame:RegisterEvent("PVP_MATCH_ACTIVE")
+pvpFrame:RegisterEvent("PVP_MATCH_STATE_CHANGED")
 -- local combatFrame = CreateFrame("Frame")
 -- combatFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 pvpFrame:SetScript("OnEvent", function(_, event, ...)
@@ -220,6 +537,13 @@ pvpFrame:SetScript("OnEvent", function(_, event, ...)
         EnableSpellTracking()
         Log("Timeline STARTED for new match.")
 
+        if PvPScalpel_IsRatedSoloShuffle() then
+            PvPScalpel_StartSoloShuffleSession()
+            PvPScalpel_HandleSoloShuffleStateChange()
+        else
+            PvPScalpel_ResetSoloShuffleState()
+        end
+
     elseif event == "PVP_MATCH_COMPLETE" then
         local winner, duration = ...
         Log(string.format("PVP MATCH COMPLETE. Winner: %s | Duration: %s", tostring(winner), tostring(duration)))
@@ -228,8 +552,17 @@ pvpFrame:SetScript("OnEvent", function(_, event, ...)
 
         C_Timer.After(0.5, function()
             Log("Capturing match summary...")
-            TryCaptureMatch()
+            if PvPScalpel_IsRatedSoloShuffle() then
+                PvPScalpel_HandleSoloShuffleStateChange()
+                PvPScalpel_FinalizeSoloShuffleMatch()
+            else
+                TryCaptureMatch()
+            end
             Log("Match record saved.")
         end)
+    elseif event == "PVP_MATCH_STATE_CHANGED" then
+        if PvPScalpel_IsRatedSoloShuffle() then
+            PvPScalpel_HandleSoloShuffleStateChange()
+        end
     end
 end)
