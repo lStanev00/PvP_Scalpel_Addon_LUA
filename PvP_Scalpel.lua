@@ -96,6 +96,7 @@ local function PvPScalpel_StartSoloShuffleRound()
     soloShuffleState.currentRound = round
     soloShuffleState.currentRoundStart = now
     table.insert(soloShuffleState.rounds, round)
+    Log(("Solo Shuffle: Round %d start"):format(soloShuffleState.currentRoundIndex))
 end
 
 local function PvPScalpel_BuildScoreSnapshot()
@@ -179,6 +180,7 @@ local function PvPScalpel_EndSoloShuffleRound()
 
     soloShuffleState.currentRound = nil
     soloShuffleState.currentRoundStart = nil
+    Log(("Solo Shuffle: Round %d end (%.1fs)"):format(round.roundIndex, round.duration or 0))
 end
 
 local function PvPScalpel_HandleSoloShuffleStateChange()
@@ -216,13 +218,27 @@ local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID)
 
     local now = GetTime()
 
-    local hp, hpMax = UnitHealth("player"), UnitHealthMax("player")
-    local powerType = UnitPowerType("player")
-    local power     = UnitPower("player", powerType)
-    local powerMax  = UnitPowerMax("player", powerType)
+    local function SafeNumber(value)
+        if type(value) ~= "number" then return nil end
+        local ok, coerced = pcall(function()
+            return value + 0
+        end)
+        return ok and coerced or nil
+    end
 
-    local hpPct    = (hpMax  > 0) and (hp / hpMax) or nil
-    local powerPct = (powerMax > 0) and (power / powerMax) or nil
+    local hpRaw, hpMaxRaw = UnitHealth("player"), UnitHealthMax("player")
+    local powerType = UnitPowerType("player")
+    local powerRaw  = UnitPower("player", powerType)
+    local powerMaxRaw = UnitPowerMax("player", powerType)
+
+    -- Guard against secure/secret values returned by UnitHealth/UnitPower during protected contexts.
+    local hp = SafeNumber(hpRaw)
+    local hpMax = SafeNumber(hpMaxRaw)
+    local power = SafeNumber(powerRaw)
+    local powerMax = SafeNumber(powerMaxRaw)
+
+    local hpPct = (hp and hpMax and hpMax > 0) and (hp / hpMax) or nil
+    local powerPct = (power and powerMax and powerMax > 0) and (power / powerMax) or nil
 
     local classification = UnitPvPClassification and UnitPvPClassification("player") or nil
 
@@ -426,7 +442,7 @@ local function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         table.insert(PvP_Scalpel_DB, match)
         lastSavedMatchTime = now
         soloShuffleState.saved = true
-        print("PvP Scalpel: Solo Shuffle match saved (" .. tostring(roundsCaptured) .. " rounds)")
+        Log("Solo Shuffle: match saved (" .. tostring(roundsCaptured) .. " rounds)")
     else
         PvPScalpel_SoloShuffleNote("duplicate_match_timestamp")
     end
@@ -540,6 +556,7 @@ pvpFrame:SetScript("OnEvent", function(_, event, ...)
         if PvPScalpel_IsRatedSoloShuffle() then
             PvPScalpel_StartSoloShuffleSession()
             PvPScalpel_HandleSoloShuffleStateChange()
+            Log("Solo Shuffle: session started")
         else
             PvPScalpel_ResetSoloShuffleState()
         end
@@ -566,3 +583,10 @@ pvpFrame:SetScript("OnEvent", function(_, event, ...)
         end
     end
 end)
+
+
+
+
+
+
+
