@@ -1,0 +1,54 @@
+name: Auto merge main to production on version bump
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  merge-on-version-bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect version bump
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="${{ github.event.before }}"
+          after="${{ github.sha }}"
+
+          if git cat-file -e "$before":PvP_Scalpel.toc 2>/dev/null; then
+            prev=$(git show "$before":PvP_Scalpel.toc | grep -m 1 '^## Version:' | sed -E 's/^## Version:[[:space:]]*//')
+          else
+            prev=""
+          fi
+
+          curr=$(git show "$after":PvP_Scalpel.toc | grep -m 1 '^## Version:' | sed -E 's/^## Version:[[:space:]]*//')
+
+          echo "Previous version: ${prev:-<none>}"
+          echo "Current version: ${curr:-<none>}"
+
+          if [ -n "$curr" ] && [ "$curr" != "$prev" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge main into production
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin production
+          git checkout production
+          git merge origin/main -m "Merge main into production"
+          git push origin production
