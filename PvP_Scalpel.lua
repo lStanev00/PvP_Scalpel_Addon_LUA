@@ -269,7 +269,18 @@ end
 
 
 local spellFrame = CreateFrame("Frame")
-local function OnSpellEvent(self, event, unit, castGUID, spellID, ...)
+local function OnSpellEvent(self, event, unit, ...)
+
+    local isMatchStarted = C_PvP.HasMatchStarted()
+    if not isMatchStarted then return end
+
+    if event == "UNIT_SPELLCAST_SENT" then
+        local _targetName, castGUID, spellID = ...
+        PvPScalpel_RecordEvent("SENT", unit, castGUID, spellID)
+        return
+    end
+
+    local castGUID, spellID = ...
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
         PvPScalpel_RecordEvent("SUCCEEDED", unit, castGUID, spellID)
     elseif event == "UNIT_SPELLCAST_START" then
@@ -299,6 +310,7 @@ local function EnableSpellTracking()
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED",  "player")
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START","player")
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", "player")
+    spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_SENT",         "player")
     
     spellFrame:SetScript("OnEvent", OnSpellEvent)
     Log("Spell Tracking ENABLED.")
