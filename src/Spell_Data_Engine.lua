@@ -1,7 +1,7 @@
 -- Cache build key to avoid repeated GetBuildInfo calls.
 local buildKeyCache = nil
--- PvP_Scalpel_Spell_Data = PvP_Scalpel_Spell_Data or {}
-PvP_Scalpel_Spell_Data = {}
+PvP_Scalpel_Spell_Data = PvP_Scalpel_Spell_Data or {}
+-- PvP_Scalpel_Spell_Data = {}
 PvPScalpel_BuildKey = PvPScalpel_BuildKey or nil
 
 -- Returns a stable build key string for spell data bucketing.
