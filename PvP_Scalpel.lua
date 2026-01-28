@@ -16,6 +16,7 @@ local currentTargetSnapshot = nil
 local castTargetSnapshotByGuid = {}
 local currentCastRecords = nil
 local castRecordByGuid = {}
+local lastMatchWinner = nil
 local PvPScalpel_UpdateCurrentTargetSnapshot
 
 local function PvPScalpel_GenerateMatchKey()
@@ -566,6 +567,7 @@ local function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
     local match = {
         matchKey = currentMatchKey,
         telemetryVersion = 2,
+        winner = lastMatchWinner,
         matchDetails = {
             timestamp = now,
             format = PvPScalpel_FormatChecker(),
@@ -637,6 +639,7 @@ local function TryCaptureMatch()
     local match = {
         matchKey = currentMatchKey,
         telemetryVersion = 2,
+        winner = lastMatchWinner,
         matchDetails = {
             timestamp = now,
             format = PvPScalpel_FormatChecker(),
@@ -746,6 +749,20 @@ pvpFrame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "PVP_MATCH_COMPLETE" then
         local winner, duration = ...
         Log(string.format("PVP MATCH COMPLETE. Winner: %s | Duration: %s", tostring(winner), tostring(duration)))
+        lastMatchWinner = nil
+        local factionIndex = GetBattlefieldArenaFaction and GetBattlefieldArenaFaction() or nil
+        if factionIndex ~= nil then
+            local enemyFactionIndex = (factionIndex + 1) % 2
+            if winner == factionIndex then
+                lastMatchWinner = "victory"
+            elseif winner == enemyFactionIndex then
+                lastMatchWinner = "defeat"
+            else
+                lastMatchWinner = "draw"
+            end
+        else
+            lastMatchWinner = "draw"
+        end
 
         DisableSpellTracking()
 
