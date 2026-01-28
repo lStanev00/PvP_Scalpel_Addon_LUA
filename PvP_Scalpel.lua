@@ -12,15 +12,25 @@ local currentTimeline = nil
 local timelineStart   = nil
 local currentMatchKey = nil  -- how you link to your match record (string or number)
 local isTracking = false;
+local currentTargetSnapshot = nil
+local castTargetSnapshotByGuid = {}
+local currentCastRecords = nil
+local castRecordByGuid = {}
+local PvPScalpel_UpdateCurrentTargetSnapshot
 
 local function PvPScalpel_GenerateMatchKey()
     return date("%Y%m%d_%H%M%S")
 end
+
 local function PvPScalpel_StartTimeline()
 
     currentTimeline = {}
     timelineStart   = GetTime()
     currentMatchKey = PvPScalpel_GenerateMatchKey()
+    castTargetSnapshotByGuid = {}
+    currentCastRecords = {}
+    castRecordByGuid = {}
+    PvPScalpel_UpdateCurrentTargetSnapshot()
 end
 
 local function PvPScalpel_StopTimeline(match)
@@ -31,12 +41,46 @@ local function PvPScalpel_StopTimeline(match)
     end
 
     match.timeline = currentTimeline
+    match.castRecords = currentCastRecords
 
     currentTimeline = nil
     timelineStart   = nil
     currentMatchKey = nil
+    currentCastRecords = nil
+    castRecordByGuid = {}
 
     return match
+end
+
+local function PvPScalpel_BuildTargetSnapshot()
+    if not (UnitExists and UnitExists("target")) then
+        return { hasTarget = false, disposition = "none" }
+    end
+
+    local isPlayer = UnitIsPlayer and UnitIsPlayer("target") or nil
+    local canAttack = UnitCanAttack and UnitCanAttack("player", "target") or nil
+    local isFriend = UnitIsFriend and UnitIsFriend("player", "target") or nil
+    local reaction = UnitReaction and UnitReaction("player", "target") or nil
+
+    local disposition = "unknown"
+    if canAttack then
+        disposition = "hostile"
+    elseif isFriend then
+        disposition = "friendly"
+    end
+
+    return {
+        hasTarget = true,
+        disposition = disposition,
+        isPlayer = isPlayer,
+        canAttack = canAttack,
+        isFriend = isFriend,
+        reaction = reaction,
+    }
+end
+
+PvPScalpel_UpdateCurrentTargetSnapshot = function()
+    currentTargetSnapshot = PvPScalpel_BuildTargetSnapshot()
 end
 
 local soloShuffleState = {
@@ -45,6 +89,7 @@ local soloShuffleState = {
     currentRound = nil,
     currentRoundIndex = 0,
     currentRoundStart = nil,
+    currentRoundCastByGuid = nil,
     lastMatchState = nil,
     notes = {},
     saved = false,
@@ -67,6 +112,7 @@ local function PvPScalpel_ResetSoloShuffleState()
     soloShuffleState.currentRound = nil
     soloShuffleState.currentRoundIndex = 0
     soloShuffleState.currentRoundStart = nil
+    soloShuffleState.currentRoundCastByGuid = nil
     soloShuffleState.lastMatchState = nil
     soloShuffleState.notes = {}
     soloShuffleState.saved = false
@@ -92,9 +138,11 @@ local function PvPScalpel_StartSoloShuffleRound()
         roundIndex = soloShuffleState.currentRoundIndex,
         stateStartTime = now,
         timeline = {},
+        castRecords = {},
     }
     soloShuffleState.currentRound = round
     soloShuffleState.currentRoundStart = now
+    soloShuffleState.currentRoundCastByGuid = {}
     table.insert(soloShuffleState.rounds, round)
     Log(("Solo Shuffle: Round %d start"):format(soloShuffleState.currentRoundIndex))
 end
@@ -129,6 +177,7 @@ local function PvPScalpel_BuildScoreSnapshot()
             table.insert(players, {
                 name = playerName,
                 realm = slugify(realm),
+                guid = score.guid,
                 classToken = score.classToken,
                 talentSpec = score.talentSpec,
                 faction = score.faction,
@@ -180,6 +229,7 @@ local function PvPScalpel_EndSoloShuffleRound()
 
     soloShuffleState.currentRound = nil
     soloShuffleState.currentRoundStart = nil
+    soloShuffleState.currentRoundCastByGuid = nil
     Log(("Solo Shuffle: Round %d end (%.1fs)"):format(round.roundIndex, round.duration or 0))
 end
 
@@ -212,7 +262,7 @@ local function PvPScalpel_HandleSoloShuffleStateChange()
     end
 end
 
-local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID)
+local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, targetSnapshot)
     if not currentTimeline or not timelineStart then return end
     if unit ~= "player" then return end
 
@@ -242,33 +292,125 @@ local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID)
 
     local classification = UnitPvPClassification and UnitPvPClassification("player") or nil
 
-    table.insert(currentTimeline, {
+    local hasSpellDataEntry = nil
+    if PvPScalpel_RecordSpellData then
+        local ok = PvPScalpel_RecordSpellData(spellID)
+        if ok == false then
+            hasSpellDataEntry = false
+        end
+    end
+
+    local eventEntry = {
         t       = now - timelineStart,
         event   = eventType,
         spellID = spellID,
         castGUID= castGUID,
+        targetInfo = targetSnapshot,
         hp      = hpPct,
         power   = powerPct,
         resourceType = powerType,
         pvpRole = classification,
-    })
+    }
+    if hasSpellDataEntry == false then
+        eventEntry.hasSpellDataEntry = false
+    end
+    table.insert(currentTimeline, eventEntry)
+
+    if castGUID and currentCastRecords then
+        local castEntry = castRecordByGuid[castGUID]
+        if not castEntry then
+            castEntry = {
+                castGUID = castGUID,
+                spellID = spellID,
+                startEvent = eventType,
+                startTime = now - timelineStart,
+                targetInfo = targetSnapshot,
+                events = {},
+            }
+            castRecordByGuid[castGUID] = castEntry
+            table.insert(currentCastRecords, castEntry)
+        end
+        if castEntry.spellID == nil and spellID ~= nil then
+            castEntry.spellID = spellID
+        end
+        if castEntry.targetInfo == nil and targetSnapshot ~= nil then
+            castEntry.targetInfo = targetSnapshot
+        end
+        table.insert(castEntry.events, {
+            t = now - timelineStart,
+            event = eventType,
+        })
+        castEntry.lastEvent = eventType
+        castEntry.lastTime = now - timelineStart
+    end
 
     if soloShuffleState.active and soloShuffleState.currentRound and soloShuffleState.currentRoundStart then
-        table.insert(soloShuffleState.currentRound.timeline, {
+        local roundEntry = {
             t       = now - soloShuffleState.currentRoundStart,
             event   = eventType,
             spellID = spellID,
             castGUID= castGUID,
+            targetInfo = targetSnapshot,
             hp      = hpPct,
             power   = powerPct,
             resourceType = powerType,
             pvpRole = classification,
-        })
+        }
+        if hasSpellDataEntry == false then
+            roundEntry.hasSpellDataEntry = false
+        end
+        table.insert(soloShuffleState.currentRound.timeline, roundEntry)
+
+        if castGUID and soloShuffleState.currentRoundCastByGuid then
+            local roundCastEntry = soloShuffleState.currentRoundCastByGuid[castGUID]
+            if not roundCastEntry then
+                roundCastEntry = {
+                    castGUID = castGUID,
+                    spellID = spellID,
+                    startEvent = eventType,
+                    startTime = now - soloShuffleState.currentRoundStart,
+                    targetInfo = targetSnapshot,
+                    events = {},
+                }
+                soloShuffleState.currentRoundCastByGuid[castGUID] = roundCastEntry
+                table.insert(soloShuffleState.currentRound.castRecords, roundCastEntry)
+            end
+            if roundCastEntry.spellID == nil and spellID ~= nil then
+                roundCastEntry.spellID = spellID
+            end
+            if roundCastEntry.targetInfo == nil and targetSnapshot ~= nil then
+                roundCastEntry.targetInfo = targetSnapshot
+            end
+            table.insert(roundCastEntry.events, {
+                t = now - soloShuffleState.currentRoundStart,
+                event = eventType,
+            })
+            roundCastEntry.lastEvent = eventType
+            roundCastEntry.lastTime = now - soloShuffleState.currentRoundStart
+        end
     end
 end
 
 
 local spellFrame = CreateFrame("Frame")
+local function PvPScalpel_ResolveCastTargetSnapshot(eventType, castGUID)
+    if not castGUID then return nil end
+
+    if eventType == "START" or eventType == "CHANNEL_START" then
+        castTargetSnapshotByGuid[castGUID] = currentTargetSnapshot
+    elseif eventType == "SUCCEEDED" and castTargetSnapshotByGuid[castGUID] == nil then
+        castTargetSnapshotByGuid[castGUID] = currentTargetSnapshot
+    end
+
+    return castTargetSnapshotByGuid[castGUID]
+end
+
+local function PvPScalpel_ClearCastTargetSnapshot(castGUID)
+    if castGUID then
+        castTargetSnapshotByGuid[castGUID] = nil
+    end
+end
+
 local function OnSpellEvent(self, event, unit, ...)
 
     local isMatchStarted = C_PvP.HasMatchStarted()
@@ -281,20 +423,35 @@ local function OnSpellEvent(self, event, unit, ...)
     end
 
     local castGUID, spellID = ...
+    local eventType = nil
+    local clearTarget = false
+
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
-        PvPScalpel_RecordEvent("SUCCEEDED", unit, castGUID, spellID)
+        eventType = "SUCCEEDED"
     elseif event == "UNIT_SPELLCAST_START" then
-        PvPScalpel_RecordEvent("START", unit, castGUID, spellID)
+        eventType = "START"
     elseif event == "UNIT_SPELLCAST_STOP" then
-        PvPScalpel_RecordEvent("STOP", unit, castGUID, spellID)
+        eventType = "STOP"
+        clearTarget = true
     elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
-        PvPScalpel_RecordEvent("FAILED", unit, castGUID, spellID)
+        eventType = "FAILED"
+        clearTarget = true
     elseif event == "UNIT_SPELLCAST_INTERRUPTED" then
-        PvPScalpel_RecordEvent("INTERRUPTED", unit, castGUID, spellID)
+        eventType = "INTERRUPTED"
+        clearTarget = true
     elseif event == "UNIT_SPELLCAST_CHANNEL_START" then
-        PvPScalpel_RecordEvent("CHANNEL_START", unit, castGUID, spellID)
+        eventType = "CHANNEL_START"
     elseif event == "UNIT_SPELLCAST_CHANNEL_STOP" then
-        PvPScalpel_RecordEvent("CHANNEL_STOP", unit, castGUID, spellID)
+        eventType = "CHANNEL_STOP"
+        clearTarget = true
+    end
+
+    if eventType then
+        local targetSnapshot = PvPScalpel_ResolveCastTargetSnapshot(eventType, castGUID)
+        PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, targetSnapshot)
+        if clearTarget then
+            PvPScalpel_ClearCastTargetSnapshot(castGUID)
+        end
     end
 end
 
@@ -322,6 +479,13 @@ local function DisableSpellTracking()
     Log("Spell Tracking DISABLED.")
 end
 
+local targetFrame = CreateFrame("Frame")
+targetFrame:RegisterUnitEvent("UNIT_TARGET", "player")
+targetFrame:SetScript("OnEvent", function(_, _, unit)
+    if unit ~= "player" then return end
+    PvPScalpel_UpdateCurrentTargetSnapshot()
+end)
+
 
 local myGUID = UnitGUID("player")
 local curentPlayerName = UnitFullName("player");
@@ -344,6 +508,7 @@ local function PvPScalpel_BuildSoloShufflePlayers()
             local entry = {
                 name = playerName,
                 realm = slugify(realm),
+                guid = score.guid,
                 class = score.classToken,
                 spec = score.talentSpec,
                 faction = score.faction,
@@ -400,10 +565,12 @@ local function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
 
     local match = {
         matchKey = currentMatchKey,
+        telemetryVersion = 2,
         matchDetails = {
             timestamp = now,
             format = PvPScalpel_FormatChecker(),
-            mapName = mapName
+            mapName = mapName,
+            build = PvPScalpel_GetBuildInfoSnapshot(),
         },
         players = PvPScalpel_BuildSoloShufflePlayers(),
     }
@@ -469,10 +636,12 @@ local function TryCaptureMatch()
     local now = date("%Y-%m-%d %H:%M:%S")
     local match = {
         matchKey = currentMatchKey,
+        telemetryVersion = 2,
         matchDetails = {
             timestamp = now,
             format = PvPScalpel_FormatChecker(),
-            mapName = mapName
+            mapName = mapName,
+            build = PvPScalpel_GetBuildInfoSnapshot(),
         },
         players = {}
     }
@@ -487,6 +656,7 @@ local function TryCaptureMatch()
             local entry = {
                 name = playerName,
                 realm = slugify(realm),
+                guid = score.guid,
                 class = score.classToken,
                 spec = score.talentSpec,
                 faction = score.faction,
