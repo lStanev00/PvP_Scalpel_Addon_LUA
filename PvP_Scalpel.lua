@@ -17,7 +17,33 @@ local castTargetSnapshotByGuid = {}
 local currentCastRecords = nil
 local castRecordByGuid = {}
 local lastMatchWinner = nil
+local trinketSlots = { 13, 14 }
+local lastTrinketCooldowns = {}
+local soloShuffleState
 local PvPScalpel_UpdateCurrentTargetSnapshot
+local function PvPScalpel_IsTable(value)
+    return type(value) == "table"
+end
+
+local function PvPScalpel_IsNumber(value)
+    return type(value) == "number"
+end
+
+local function PvPScalpel_IsDuplicateMatch(matchKey, timestamp)
+    if not matchKey or not PvPScalpel_IsTable(PvP_Scalpel_DB) then
+        return true
+    end
+    for _, match in ipairs(PvP_Scalpel_DB) do
+        if PvPScalpel_IsTable(match) and match.matchKey == matchKey then
+            return true
+        end
+        if timestamp and PvPScalpel_IsTable(match) and match.matchDetails
+            and match.matchDetails.timestamp == timestamp and match.matchKey == matchKey then
+            return true
+        end
+    end
+    return false
+end
 
 local function PvPScalpel_GenerateMatchKey()
     return date("%Y%m%d_%H%M%S")
@@ -31,6 +57,18 @@ local function PvPScalpel_StartTimeline()
     castTargetSnapshotByGuid = {}
     currentCastRecords = {}
     castRecordByGuid = {}
+    if GetInventoryItemCooldown then
+        for _, slot in ipairs(trinketSlots) do
+            local start, duration, enable = GetInventoryItemCooldown("player", slot)
+            lastTrinketCooldowns[slot] = {
+                start = start or 0,
+                duration = duration or 0,
+                enabled = enable or 0,
+            }
+        end
+    else
+        lastTrinketCooldowns = {}
+    end
     PvPScalpel_UpdateCurrentTargetSnapshot()
 end
 
@@ -39,6 +77,10 @@ local function PvPScalpel_StopTimeline(match)
 
     if not match then
         match = { matchKey = currentMatchKey }
+    end
+
+    if not PvPScalpel_IsTable(currentTimeline) or not PvPScalpel_IsTable(currentCastRecords) then
+        return match
     end
 
     match.timeline = currentTimeline
@@ -84,7 +126,68 @@ PvPScalpel_UpdateCurrentTargetSnapshot = function()
     currentTargetSnapshot = PvPScalpel_BuildTargetSnapshot()
 end
 
-local soloShuffleState = {
+local function PvPScalpel_RecordItemUse(slot, start, duration, itemID, reason)
+    if not PvPScalpel_IsTable(currentTimeline) or not PvPScalpel_IsNumber(timelineStart) then return end
+
+    local now = GetTime()
+    if not PvPScalpel_IsNumber(now) then return end
+    local entry = {
+        t = now - timelineStart,
+        event = "ITEM_USE",
+        slot = slot,
+        itemID = itemID,
+        cdStart = start,
+        cdDuration = duration,
+        source = reason,
+    }
+    if not PvPScalpel_IsNumber(entry.t) then return end
+    table.insert(currentTimeline, entry)
+
+    if soloShuffleState and soloShuffleState.active and soloShuffleState.currentRound
+        and soloShuffleState.currentRoundStart then
+        local roundEntry = {
+            t = now - soloShuffleState.currentRoundStart,
+            event = "ITEM_USE",
+            slot = slot,
+            itemID = itemID,
+            cdStart = start,
+            cdDuration = duration,
+            source = reason,
+        }
+        if PvPScalpel_IsTable(soloShuffleState.currentRound.timeline) and PvPScalpel_IsNumber(roundEntry.t) then
+            table.insert(soloShuffleState.currentRound.timeline, roundEntry)
+        else
+            PvPScalpel_SoloShuffleNote("round_timeline_missing")
+        end
+    end
+end
+
+local function PvPScalpel_CheckTrinketCooldowns(reason)
+    if not GetInventoryItemCooldown then return end
+
+    for _, slot in ipairs(trinketSlots) do
+        local start, duration, enable = GetInventoryItemCooldown("player", slot)
+        if start and duration then
+            local enabled = enable or 0
+            local prev = lastTrinketCooldowns[slot]
+            local prevActive = prev and prev.start and prev.start > 0 and prev.duration and prev.duration > 0 and prev.enabled == 1
+            local active = (start > 0 and duration > 0 and enabled == 1)
+
+            if active and not prevActive then
+                local itemID = GetInventoryItemID and GetInventoryItemID("player", slot) or nil
+                PvPScalpel_RecordItemUse(slot, start, duration, itemID, reason)
+            end
+
+            lastTrinketCooldowns[slot] = {
+                start = start,
+                duration = duration,
+                enabled = enabled,
+            }
+        end
+    end
+end
+
+soloShuffleState = {
     active = false,
     rounds = {},
     currentRound = nil,
@@ -144,6 +247,10 @@ local function PvPScalpel_StartSoloShuffleRound()
     soloShuffleState.currentRound = round
     soloShuffleState.currentRoundStart = now
     soloShuffleState.currentRoundCastByGuid = {}
+    if not PvPScalpel_IsTable(soloShuffleState.rounds) then
+        soloShuffleState.rounds = {}
+        PvPScalpel_SoloShuffleNote("rounds_table_reset")
+    end
     table.insert(soloShuffleState.rounds, round)
     Log(("Solo Shuffle: Round %d start"):format(soloShuffleState.currentRoundIndex))
 end
@@ -264,10 +371,11 @@ local function PvPScalpel_HandleSoloShuffleStateChange()
 end
 
 local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, targetSnapshot)
-    if not currentTimeline or not timelineStart then return end
+    if not PvPScalpel_IsTable(currentTimeline) or not PvPScalpel_IsNumber(timelineStart) then return end
     if unit ~= "player" then return end
 
     local now = GetTime()
+    if not PvPScalpel_IsNumber(now) then return end
 
     local function SafeNumber(value)
         if type(value) ~= "number" then return nil end
@@ -312,12 +420,13 @@ local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, target
         resourceType = powerType,
         pvpRole = classification,
     }
+    if not PvPScalpel_IsNumber(eventEntry.t) then return end
     if hasSpellDataEntry == false then
         eventEntry.hasSpellDataEntry = false
     end
     table.insert(currentTimeline, eventEntry)
 
-    if castGUID and currentCastRecords then
+    if castGUID and PvPScalpel_IsTable(currentCastRecords) then
         local castEntry = castRecordByGuid[castGUID]
         if not castEntry then
             castEntry = {
@@ -331,21 +440,31 @@ local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, target
             castRecordByGuid[castGUID] = castEntry
             table.insert(currentCastRecords, castEntry)
         end
+        if not PvPScalpel_IsTable(castEntry.events) then
+            castEntry.events = {}
+        end
         if castEntry.spellID == nil and spellID ~= nil then
             castEntry.spellID = spellID
         end
         if castEntry.targetInfo == nil and targetSnapshot ~= nil then
             castEntry.targetInfo = targetSnapshot
         end
-        table.insert(castEntry.events, {
-            t = now - timelineStart,
-            event = eventType,
-        })
-        castEntry.lastEvent = eventType
-        castEntry.lastTime = now - timelineStart
+        local castEventTime = now - timelineStart
+        if PvPScalpel_IsNumber(castEventTime) then
+            local lastTime = castEntry.lastTime
+            if not lastTime or castEventTime >= lastTime then
+                table.insert(castEntry.events, {
+                    t = castEventTime,
+                    event = eventType,
+                })
+                castEntry.lastEvent = eventType
+                castEntry.lastTime = castEventTime
+            end
+        end
     end
 
-    if soloShuffleState.active and soloShuffleState.currentRound and soloShuffleState.currentRoundStart then
+    if soloShuffleState and soloShuffleState.active and soloShuffleState.currentRound
+        and soloShuffleState.currentRoundStart then
         local roundEntry = {
             t       = now - soloShuffleState.currentRoundStart,
             event   = eventType,
@@ -357,10 +476,15 @@ local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, target
             resourceType = powerType,
             pvpRole = classification,
         }
+        if not PvPScalpel_IsNumber(roundEntry.t) then return end
         if hasSpellDataEntry == false then
             roundEntry.hasSpellDataEntry = false
         end
-        table.insert(soloShuffleState.currentRound.timeline, roundEntry)
+        if PvPScalpel_IsTable(soloShuffleState.currentRound.timeline) then
+            table.insert(soloShuffleState.currentRound.timeline, roundEntry)
+        else
+            PvPScalpel_SoloShuffleNote("round_timeline_missing")
+        end
 
         if castGUID and soloShuffleState.currentRoundCastByGuid then
             local roundCastEntry = soloShuffleState.currentRoundCastByGuid[castGUID]
@@ -374,7 +498,14 @@ local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, target
                     events = {},
                 }
                 soloShuffleState.currentRoundCastByGuid[castGUID] = roundCastEntry
-                table.insert(soloShuffleState.currentRound.castRecords, roundCastEntry)
+                if PvPScalpel_IsTable(soloShuffleState.currentRound.castRecords) then
+                    table.insert(soloShuffleState.currentRound.castRecords, roundCastEntry)
+                else
+                    PvPScalpel_SoloShuffleNote("round_cast_records_missing")
+                end
+            end
+            if not PvPScalpel_IsTable(roundCastEntry.events) then
+                roundCastEntry.events = {}
             end
             if roundCastEntry.spellID == nil and spellID ~= nil then
                 roundCastEntry.spellID = spellID
@@ -382,18 +513,41 @@ local function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, target
             if roundCastEntry.targetInfo == nil and targetSnapshot ~= nil then
                 roundCastEntry.targetInfo = targetSnapshot
             end
-            table.insert(roundCastEntry.events, {
-                t = now - soloShuffleState.currentRoundStart,
-                event = eventType,
-            })
-            roundCastEntry.lastEvent = eventType
-            roundCastEntry.lastTime = now - soloShuffleState.currentRoundStart
+            local roundEventTime = now - soloShuffleState.currentRoundStart
+            if PvPScalpel_IsNumber(roundEventTime) then
+                local lastTime = roundCastEntry.lastTime
+                if not lastTime or roundEventTime >= lastTime then
+                    table.insert(roundCastEntry.events, {
+                        t = roundEventTime,
+                        event = eventType,
+                    })
+                    roundCastEntry.lastEvent = eventType
+                    roundCastEntry.lastTime = roundEventTime
+                end
+            end
         end
     end
 end
 
 
 local spellFrame = CreateFrame("Frame")
+local function IsRealCastGUID(castGUID)
+    if not castGUID then return true end
+    if string.sub(castGUID, 1, 7) == "Cast-2-" then
+        return false
+    end
+    if string.sub(castGUID, 1, 7) == "Cast-3-" then
+        return true
+    end
+    if string.sub(castGUID, 1, 7) == "Cast-4-" then
+        return true
+    end
+    if string.sub(castGUID, 1, 8) == "Cast-15-" then
+        return true
+    end
+    return true
+end
+
 local function PvPScalpel_ResolveCastTargetSnapshot(eventType, castGUID)
     if not castGUID then return nil end
 
@@ -419,11 +573,19 @@ local function OnSpellEvent(self, event, unit, ...)
 
     if event == "UNIT_SPELLCAST_SENT" then
         local _targetName, castGUID, spellID = ...
+        if castGUID and not IsRealCastGUID(castGUID) then
+            -- Log("PvPScalpel: Ignored Cast-2 GUID (client-side check).")
+            return
+        end
         PvPScalpel_RecordEvent("SENT", unit, castGUID, spellID)
         return
     end
 
     local castGUID, spellID = ...
+    if castGUID and not IsRealCastGUID(castGUID) then
+        -- Log("PvPScalpel: Ignored Cast-2 GUID (client-side check).")
+        return
+    end
     local eventType = nil
     local clearTarget = false
 
@@ -591,8 +753,16 @@ local function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         end
     end
 
+    if not PvPScalpel_IsTable(soloShuffleState.rounds) then
+        PvPScalpel_SoloShuffleNote("rounds_table_missing")
+        soloShuffleState.rounds = {}
+    end
     local roundsCaptured = #soloShuffleState.rounds
     local integrityNotes = soloShuffleState.notes or {}
+    if roundsCaptured > 6 then
+        PvPScalpel_SoloShuffleNote("rounds_exceeded_expected")
+        roundsCaptured = 6
+    end
 
     match.soloShuffle = {
         matchKey = currentMatchKey,
@@ -620,6 +790,18 @@ local function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
     }
 
     if lastSavedMatchTime ~= now then
+        if not PvPScalpel_IsTable(match.timeline) then
+            PvPScalpel_SoloShuffleNote("timeline_missing")
+            return
+        end
+        if not PvPScalpel_IsTable(match.castRecords) then
+            PvPScalpel_SoloShuffleNote("cast_records_nil")
+            return
+        end
+        if PvPScalpel_IsDuplicateMatch(match.matchKey, match.matchDetails and match.matchDetails.timestamp) then
+            PvPScalpel_SoloShuffleNote("duplicate_match")
+            return
+        end
         table.insert(PvP_Scalpel_DB, match)
         lastSavedMatchTime = now
         soloShuffleState.saved = true
@@ -693,6 +875,15 @@ local function TryCaptureMatch()
 
     if lastSavedMatchTime ~= now and #match.players > 0 then
         match = PvPScalpel_StopTimeline(match)
+        if not PvPScalpel_IsTable(match.timeline) then
+            return
+        end
+        if not PvPScalpel_IsTable(match.castRecords) then
+            return
+        end
+        if PvPScalpel_IsDuplicateMatch(match.matchKey, match.matchDetails and match.matchDetails.timestamp) then
+            return
+        end
         table.insert(PvP_Scalpel_DB, match)
         lastSavedMatchTime = now
         print("PvP Scalpel: Match saved (" .. #match.players .. " players)")
@@ -783,6 +974,14 @@ pvpFrame:SetScript("OnEvent", function(_, event, ...)
     end
 end)
 
+local trinketCooldownFrame = CreateFrame("Frame")
+trinketCooldownFrame:RegisterEvent("BAG_UPDATE_COOLDOWN")
+trinketCooldownFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+trinketCooldownFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+trinketCooldownFrame:SetScript("OnEvent", function(_, event)
+    if not currentTimeline or not timelineStart then return end
+    PvPScalpel_CheckTrinketCooldowns(event)
+end)
 
 
 
