@@ -100,9 +100,11 @@ function PvPScalpel_RecordSpellData(spellID)
         entry.type = PvPScalpel_GetSpellType(spellID)
     end
 
-    PvP_Scalpel_Spell_Data[buildKey][spellID] = entry
-    if entry.name ~= nil or entry.description ~= nil or entry.subtext ~= nil or entry.type ~= nil then
-        return true
+    if entry.name == nil then
+        PvP_Scalpel_Spell_Data[buildKey][spellID] = nil
+        return nil
     end
-    return nil
+
+    PvP_Scalpel_Spell_Data[buildKey][spellID] = entry
+    return true
 end
