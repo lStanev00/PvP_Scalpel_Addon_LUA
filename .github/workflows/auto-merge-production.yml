@@ -15,6 +15,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.PRODUCTION_PUSH_TOKEN || github.token }}
 
       - name: Detect version bump
         id: version
