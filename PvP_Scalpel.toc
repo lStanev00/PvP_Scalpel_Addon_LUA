@@ -14,4 +14,7 @@ src/Match_Length.lua
 src/Get_Stats.lua
 src/Build_Info.lua
 src/Spell_Data_Engine.lua
+src/Recorder_State.lua
+src/Telemetry_Recorder.lua
+src/Spell_Tracker.lua
 PvP_Scalpel.lua
