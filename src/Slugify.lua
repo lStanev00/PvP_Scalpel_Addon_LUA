@@ -1,4 +1,4 @@
-function slugify(text)
+function PvPScalpel_Slugify(text)
     if not text or text == "" then return "" end
 
     -- Normalize text
