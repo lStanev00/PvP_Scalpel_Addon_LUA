@@ -35,7 +35,8 @@ end
 
 -- Debug logging (safe: avoids printing during combat lock / restriction windows).
 if PvPScalpel_Debug == nil then
-    PvPScalpel_Debug = true
+    -- Production default: keep chat quiet unless the user explicitly enables debug via /pvpsdebug.
+    PvPScalpel_Debug = false
 end
 
 PvPScalpel_LogQueue = PvPScalpel_LogQueue or {}
@@ -87,4 +88,3 @@ function PvPScalpel_Log(msg)
         print(prefix .. message)
     end
 end
-
