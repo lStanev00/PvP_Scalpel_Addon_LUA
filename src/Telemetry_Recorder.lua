@@ -1,11 +1,3 @@
-function PvPScalpel_IsTable(value)
-    return type(value) == "table"
-end
-
-function PvPScalpel_IsNumber(value)
-    return type(value) == "number"
-end
-
 function PvPScalpel_IsDuplicateMatch(matchKey, timestamp)
     if not matchKey or not PvPScalpel_IsTable(PvP_Scalpel_DB) then
         return true
@@ -33,6 +25,8 @@ function PvPScalpel_StartTimeline()
     castTargetSnapshotByGuid = {}
     currentCastRecords = {}
     castRecordByGuid = {}
+    currentSpellTotals = {}
+    currentCastOutcomes = {}
     if GetInventoryItemCooldown then
         for _, slot in ipairs(trinketSlots) do
             local start, duration, enable = GetInventoryItemCooldown("player", slot)
@@ -63,14 +57,120 @@ function PvPScalpel_StopTimeline(match)
 
     match.timeline = currentTimeline
     match.castRecords = currentCastRecords
+    if PvPScalpel_IsTable(currentSpellTotals) then
+        match.spellTotals = currentSpellTotals
+    end
+    if PvPScalpel_IsTable(currentCastOutcomes) then
+        match.castOutcomes = currentCastOutcomes
+    end
 
     currentTimeline = nil
     timelineStart = nil
     currentMatchKey = nil
     currentCastRecords = nil
     castRecordByGuid = {}
+    currentSpellTotals = nil
+    currentCastOutcomes = nil
 
     return match
+end
+
+function PvPScalpel_RecordSpellTotal(spellID, targetName, damage, healing, overheal, absorbed, isCrit)
+    if not spellID then return end
+    if not currentSpellTotals then
+        currentSpellTotals = {}
+    end
+
+    local entry = currentSpellTotals[spellID]
+    if not entry then
+        entry = {
+            damage = 0,
+            healing = 0,
+            overheal = 0,
+            absorbed = 0,
+            hits = 0,
+            crits = 0,
+            targets = {},
+            interrupts = 0,
+            dispels = 0,
+        }
+        currentSpellTotals[spellID] = entry
+    end
+
+    if PvPScalpel_IsNumber(damage) and damage > 0 then
+        entry.damage = entry.damage + damage
+    end
+    if PvPScalpel_IsNumber(healing) and healing > 0 then
+        entry.healing = entry.healing + healing
+    end
+    if PvPScalpel_IsNumber(overheal) and overheal > 0 then
+        entry.overheal = entry.overheal + overheal
+    end
+    if PvPScalpel_IsNumber(absorbed) and absorbed > 0 then
+        entry.absorbed = entry.absorbed + absorbed
+    end
+
+    entry.hits = entry.hits + 1
+    if isCrit then
+        entry.crits = entry.crits + 1
+    end
+
+    if targetName then
+        local amount = 0
+        if PvPScalpel_IsNumber(damage) and damage > 0 then
+            amount = damage
+        elseif PvPScalpel_IsNumber(healing) and healing > 0 then
+            amount = healing
+        end
+        if amount > 0 then
+            entry.targets[targetName] = (entry.targets[targetName] or 0) + amount
+        end
+    end
+end
+
+function PvPScalpel_RecordSpellUtilityTotal(spellID, kind, amount)
+    if not spellID or not kind then return end
+    if not currentSpellTotals then
+        currentSpellTotals = {}
+    end
+
+    local entry = currentSpellTotals[spellID]
+    if not entry then
+        entry = {
+            damage = 0,
+            healing = 0,
+            overheal = 0,
+            absorbed = 0,
+            hits = 0,
+            crits = 0,
+            targets = {},
+            interrupts = 0,
+            dispels = 0,
+        }
+        currentSpellTotals[spellID] = entry
+    end
+
+    if kind == "interrupts" then
+        if PvPScalpel_IsNumber(amount) and amount > 0 then
+            entry.interrupts = entry.interrupts + amount
+        else
+            entry.interrupts = entry.interrupts + 1
+        end
+    elseif kind == "dispels" then
+        if PvPScalpel_IsNumber(amount) and amount > 0 then
+            entry.dispels = entry.dispels + amount
+        else
+            entry.dispels = entry.dispels + 1
+        end
+    end
+end
+
+function PvPScalpel_RecordCastOutcome(outcome)
+    if not PvPScalpel_IsTable(outcome) then return end
+    if not currentCastOutcomes then
+        currentCastOutcomes = {}
+    end
+    table.insert(currentCastOutcomes, outcome)
 end
 
 local function PvPScalpel_BuildTargetSnapshot()
@@ -172,36 +272,9 @@ function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, targetSnapsh
     local now = GetTime()
     if not PvPScalpel_IsNumber(now) then return end
 
-    local function SafeNumber(value)
-        if type(value) ~= "number" then return nil end
-        local ok, coerced = pcall(function()
-            return value + 0
-        end)
-        return ok and coerced or nil
-    end
-
-    local hpRaw, hpMaxRaw = UnitHealth("player"), UnitHealthMax("player")
-    local powerType = UnitPowerType("player")
-    local powerRaw = UnitPower("player", powerType)
-    local powerMaxRaw = UnitPowerMax("player", powerType)
-
-    local hp = SafeNumber(hpRaw)
-    local hpMax = SafeNumber(hpMaxRaw)
-    local power = SafeNumber(powerRaw)
-    local powerMax = SafeNumber(powerMaxRaw)
-
-    local hpPct = (hp and hpMax and hpMax > 0) and (hp / hpMax) or nil
-    local powerPct = (power and powerMax and powerMax > 0) and (power / powerMax) or nil
+    -- opt out of hp/power recording to avoid secure value taint
 
     local classification = UnitPvPClassification and UnitPvPClassification("player") or nil
-
-    local hasSpellDataEntry = nil
-    if PvPScalpel_RecordSpellData then
-        local ok = PvPScalpel_RecordSpellData(spellID)
-        if ok == false then
-            hasSpellDataEntry = false
-        end
-    end
 
     local eventEntry = {
         t = now - timelineStart,
@@ -209,15 +282,10 @@ function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, targetSnapsh
         spellID = spellID,
         castGUID = castGUID,
         targetInfo = targetSnapshot,
-        hp = hpPct,
-        power = powerPct,
-        resourceType = powerType,
+        -- hp/power/resourceType intentionally omitted
         pvpRole = classification,
     }
     if not PvPScalpel_IsNumber(eventEntry.t) then return end
-    if hasSpellDataEntry == false then
-        eventEntry.hasSpellDataEntry = false
-    end
     table.insert(currentTimeline, eventEntry)
 
     if castGUID and PvPScalpel_IsTable(currentCastRecords) then
@@ -265,15 +333,10 @@ function PvPScalpel_RecordEvent(eventType, unit, castGUID, spellID, targetSnapsh
             spellID = spellID,
             castGUID = castGUID,
             targetInfo = targetSnapshot,
-            hp = hpPct,
-            power = powerPct,
-            resourceType = powerType,
+            -- hp/power/resourceType intentionally omitted
             pvpRole = classification,
         }
         if not PvPScalpel_IsNumber(roundEntry.t) then return end
-        if hasSpellDataEntry == false then
-            roundEntry.hasSpellDataEntry = false
-        end
         if PvPScalpel_IsTable(soloShuffleState.currentRound.timeline) then
             table.insert(soloShuffleState.currentRound.timeline, roundEntry)
         else

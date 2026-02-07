@@ -3,8 +3,23 @@ PvP_Scalpel_DB = PvP_Scalpel_DB or {}
 SLASH_PVPSCALPELRESET1 = "/pvpsreset"
 SlashCmdList["PVPSCALPELRESET"] = function()
     PvP_Scalpel_DB = {}
-    Log("database wiped.")
+    PvPScalpel_Log("database wiped.")
     C_UI.Reload()
+end
+
+SLASH_PVPSCALPELDEBUG1 = "/pvpsdebug"
+SlashCmdList["PVPSCALPELDEBUG"] = function()
+    if PvPScalpel_Debug == nil then
+        PvPScalpel_Debug = true
+    else
+        PvPScalpel_Debug = not PvPScalpel_Debug
+    end
+    local prefix = "|cff00ff98[PvP Scalpel]|r "
+    if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+        DEFAULT_CHAT_FRAME:AddMessage(prefix .. "Debug logging: " .. tostring(PvPScalpel_Debug))
+    else
+        print(prefix .. "Debug logging: " .. tostring(PvPScalpel_Debug))
+    end
 end
 
 
@@ -75,7 +90,7 @@ local function PvPScalpel_StartSoloShuffleRound()
         PvPScalpel_SoloShuffleNote("rounds_table_reset")
     end
     table.insert(soloShuffleState.rounds, round)
-    Log(("Solo Shuffle: Round %d start"):format(soloShuffleState.currentRoundIndex))
+    PvPScalpel_Log(("Solo Shuffle: Round %d start"):format(soloShuffleState.currentRoundIndex))
 end
 
 local function PvPScalpel_BuildScoreSnapshot()
@@ -107,7 +122,7 @@ local function PvPScalpel_BuildScoreSnapshot()
 
             table.insert(players, {
                 name = playerName,
-                realm = slugify(realm),
+                realm = PvPScalpel_Slugify(realm),
                 guid = score.guid,
                 classToken = score.classToken,
                 talentSpec = score.talentSpec,
@@ -161,7 +176,7 @@ local function PvPScalpel_EndSoloShuffleRound()
     soloShuffleState.currentRound = nil
     soloShuffleState.currentRoundStart = nil
     soloShuffleState.currentRoundCastByGuid = nil
-    Log(("Solo Shuffle: Round %d end (%.1fs)"):format(round.roundIndex, round.duration or 0))
+    PvPScalpel_Log(("Solo Shuffle: Round %d end (%.1fs)"):format(round.roundIndex, round.duration or 0))
 end
 
 local function PvPScalpel_HandleSoloShuffleStateChange()
@@ -213,7 +228,7 @@ local function PvPScalpel_BuildSoloShufflePlayers()
 
             local entry = {
                 name = playerName,
-                realm = slugify(realm),
+                realm = PvPScalpel_Slugify(realm),
                 guid = score.guid,
                 class = score.classToken,
                 spec = score.talentSpec,
@@ -348,7 +363,7 @@ local function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         table.insert(PvP_Scalpel_DB, match)
         lastSavedMatchTime = now
         soloShuffleState.saved = true
-        Log("Solo Shuffle: match saved (" .. tostring(roundsCaptured) .. " rounds)")
+        PvPScalpel_Log("Solo Shuffle: match saved (" .. tostring(roundsCaptured) .. " rounds)")
     else
         PvPScalpel_SoloShuffleNote("duplicate_match_timestamp")
     end
@@ -383,7 +398,7 @@ local function TryCaptureMatch()
 
             local entry = {
                 name = playerName,
-                realm = slugify(realm),
+                realm = PvPScalpel_Slugify(realm),
                 guid = score.guid,
                 class = score.classToken,
                 spec = score.talentSpec,
@@ -401,9 +416,9 @@ local function TryCaptureMatch()
             }
             local isOwner = (curentPlayerName == playerName)
             if isOwner then
-                print("[PvP Scalpel] MMR Change:")
-                print("Pre-match MMR: ", entry.prematchMMR)
-                print("Post-match MMR: ", entry.postmatchMMR)
+                PvPScalpel_Log("[PvP Scalpel] MMR Change:")
+                PvPScalpel_Log("Pre-match MMR: " .. tostring(entry.prematchMMR))
+                PvPScalpel_Log("Post-match MMR: " .. tostring(entry.postmatchMMR))
             end
 
 
@@ -429,7 +444,7 @@ local function TryCaptureMatch()
         end
         table.insert(PvP_Scalpel_DB, match)
         lastSavedMatchTime = now
-        print("PvP Scalpel: Match saved (" .. #match.players .. " players)")
+        PvPScalpel_Log("PvP Scalpel: Match saved (" .. #match.players .. " players)")
     end
 
     isTracking = false
@@ -453,8 +468,8 @@ zoneFrame:SetScript("OnEvent", function(self)
     if formatCheck ~= "Unknown Format" and not isTracking then
         -- Just entered a PvP instance
         isTracking = true
-        print(currentMatchKey)
-        print(("PvPScalpel: Tracking ON (%s)"):format(formatCheck))
+        PvPScalpel_Log(tostring(currentMatchKey))
+        PvPScalpel_Log(("PvPScalpel: Tracking ON (%s)"):format(formatCheck))
 
     end
 end)
@@ -467,22 +482,25 @@ pvpFrame:RegisterEvent("PVP_MATCH_STATE_CHANGED")
 -- combatFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 pvpFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "PVP_MATCH_ACTIVE" then
-        Log("PVP MATCH ACTIVE detected.")
+        PvPScalpel_Log("PVP MATCH ACTIVE detected.")
         PvPScalpel_StartTimeline()
-        EnableSpellTracking()
-        Log("Timeline STARTED for new match.")
+        if PvPScalpel_DamageMeterMarkStart then
+            PvPScalpel_DamageMeterMarkStart()
+        end
+        PvPScalpel_EnableSpellTracking()
+        PvPScalpel_Log("Timeline STARTED for new match.")
 
         if PvPScalpel_IsRatedSoloShuffle() then
             PvPScalpel_StartSoloShuffleSession()
             PvPScalpel_HandleSoloShuffleStateChange()
-            Log("Solo Shuffle: session started")
+            PvPScalpel_Log("Solo Shuffle: session started")
         else
             PvPScalpel_ResetSoloShuffleState()
         end
 
     elseif event == "PVP_MATCH_COMPLETE" then
         local winner, duration = ...
-        Log(string.format("PVP MATCH COMPLETE. Winner: %s | Duration: %s", tostring(winner), tostring(duration)))
+        PvPScalpel_Log(string.format("PVP MATCH COMPLETE. Winner: %s | Duration: %s", tostring(winner), tostring(duration)))
         lastMatchWinner = nil
         local factionIndex = GetBattlefieldArenaFaction and GetBattlefieldArenaFaction() or nil
         if factionIndex ~= nil then
@@ -498,17 +516,25 @@ pvpFrame:SetScript("OnEvent", function(_, event, ...)
             lastMatchWinner = "draw"
         end
 
-        DisableSpellTracking()
+        PvPScalpel_DisableSpellTracking()
 
         C_Timer.After(0.5, function()
-            Log("Capturing match summary...")
-            if PvPScalpel_IsRatedSoloShuffle() then
-                PvPScalpel_HandleSoloShuffleStateChange()
-                PvPScalpel_FinalizeSoloShuffleMatch()
-            else
-                TryCaptureMatch()
+            local function finalizeMatch()
+                PvPScalpel_Log("Capturing match summary...")
+                if PvPScalpel_IsRatedSoloShuffle() then
+                    PvPScalpel_HandleSoloShuffleStateChange()
+                    PvPScalpel_FinalizeSoloShuffleMatch()
+                else
+                    TryCaptureMatch()
+                end
+                PvPScalpel_Log("Match record saved.")
             end
-            Log("Match record saved.")
+
+            if PvPScalpel_RequestDamageMeterTotals then
+                PvPScalpel_RequestDamageMeterTotals(finalizeMatch)
+            else
+                finalizeMatch()
+            end
         end)
     elseif event == "PVP_MATCH_STATE_CHANGED" then
         if PvPScalpel_IsRatedSoloShuffle() then

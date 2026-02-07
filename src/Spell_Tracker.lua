@@ -24,7 +24,7 @@ local function OnSpellEvent(self, event, unit, ...)
     if event == "UNIT_SPELLCAST_SENT" then
         local _targetName, castGUID, spellID = ...
         if castGUID and not IsRealCastGUID(castGUID) then
-            -- Log("PvPScalpel: Ignored Cast-2 GUID (client-side check).")
+            -- PvPScalpel_Log("PvPScalpel: Ignored Cast-2 GUID (client-side check).")
             return
         end
         PvPScalpel_RecordEvent("SENT", unit, castGUID, spellID)
@@ -33,7 +33,7 @@ local function OnSpellEvent(self, event, unit, ...)
 
     local castGUID, spellID = ...
     if castGUID and not IsRealCastGUID(castGUID) then
-        -- Log("PvPScalpel: Ignored Cast-2 GUID (client-side check).")
+        -- PvPScalpel_Log("PvPScalpel: Ignored Cast-2 GUID (client-side check).")
         return
     end
     local eventType = nil
@@ -68,8 +68,8 @@ local function OnSpellEvent(self, event, unit, ...)
     end
 end
 
-function EnableSpellTracking()
-    Log("Enabling Spell Tracking...")
+function PvPScalpel_EnableSpellTracking()
+    PvPScalpel_Log("Enabling Spell Tracking...")
 
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_STOP", "player")
@@ -82,13 +82,13 @@ function EnableSpellTracking()
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
 
     spellFrame:SetScript("OnEvent", OnSpellEvent)
-    Log("Spell Tracking ENABLED.")
+    PvPScalpel_Log("Spell Tracking ENABLED.")
 end
 
-function DisableSpellTracking()
-    Log("Disabling Spell Tracking...")
+function PvPScalpel_DisableSpellTracking()
+    PvPScalpel_Log("Disabling Spell Tracking...")
     spellFrame:UnregisterAllEvents()
-    Log("Spell Tracking DISABLED.")
+    PvPScalpel_Log("Spell Tracking DISABLED.")
 end
 
 local targetFrame = CreateFrame("Frame")

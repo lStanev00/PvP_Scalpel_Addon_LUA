@@ -13,7 +13,7 @@ frame:SetScript("OnEvent", function(_, event)
         local matchEndTime = GetTime()
         local matchDuration = matchEndTime - matchStartTime
         local matchDurationMinutes = math.floor(matchDuration / 60)
-        print("Arena Match Length: " .. matchDurationMinutes .. " minutes")
+        PvPScalpel_Log("Arena Match Length: " .. matchDurationMinutes .. " minutes")
         matchStartTime = nil
     end
 end)
