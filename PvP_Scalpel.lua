@@ -93,7 +93,19 @@ local function PvPScalpel_StartSoloShuffleRound()
     PvPScalpel_Log(("Solo Shuffle: Round %d start"):format(soloShuffleState.currentRoundIndex))
 end
 
+local function PvPScalpel_PrepareScoreboardRead()
+    -- Scoreboard APIs can be filtered by the user's UI tab selection (Horde/Alliance).
+    -- Force "All" so we always capture both teams when the match is factional.
+    if SetBattlefieldScoreFaction then
+        pcall(SetBattlefieldScoreFaction, -1)
+    end
+    if RequestBattlefieldScoreData then
+        pcall(RequestBattlefieldScoreData)
+    end
+end
+
 local function PvPScalpel_BuildScoreSnapshot()
+    PvPScalpel_PrepareScoreboardRead()
     local totalPlayers = GetNumBattlefieldScores()
     if totalPlayers == 0 then
         return nil, "scoreboard_empty"
@@ -214,6 +226,7 @@ local curentPlayerName = UnitFullName("player");
 local lastSavedMatchTime = nil
 
 local function PvPScalpel_BuildSoloShufflePlayers()
+    PvPScalpel_PrepareScoreboardRead()
     local totalPlayers = GetNumBattlefieldScores()
     if totalPlayers == 0 then
         return {}
@@ -369,9 +382,19 @@ local function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
     end
 end
 
-local function TryCaptureMatch()
+local function TryCaptureMatch(attempt)
+    attempt = attempt or 1
+    PvPScalpel_PrepareScoreboardRead()
+
     local totalPlayers = GetNumBattlefieldScores()
-    if totalPlayers == 0 then return end
+    if totalPlayers == 0 then
+        if attempt <= 10 then
+            C_Timer.After(0.3, function()
+                TryCaptureMatch(attempt + 1)
+            end)
+        end
+        return
+    end
 
     local mapName = GetRealZoneText();
     
@@ -428,6 +451,28 @@ local function TryCaptureMatch()
             end
 
             table.insert(match.players, entry)
+        end
+    end
+
+    -- If we only see one faction, it usually means the scoreboard is still filtered.
+    -- Retry briefly to avoid saving a match missing the player's team.
+    local isFactional = C_PvP and C_PvP.IsMatchFactional and C_PvP.IsMatchFactional() or false
+    if isFactional then
+        local hordeCount, allianceCount = 0, 0
+        for i = 1, #match.players do
+            local f = match.players[i] and match.players[i].faction or nil
+            if f == 0 then
+                hordeCount = hordeCount + 1
+            elseif f == 1 then
+                allianceCount = allianceCount + 1
+            end
+        end
+
+        if (hordeCount == 0 or allianceCount == 0) and attempt <= 10 then
+            C_Timer.After(0.3, function()
+                TryCaptureMatch(attempt + 1)
+            end)
+            return
         end
     end
 
