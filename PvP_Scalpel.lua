@@ -1,8 +1,14 @@
 PvP_Scalpel_DB = PvP_Scalpel_DB or {}
 
+PvP_Scalpel_GC = PvP_Scalpel_GC or {}
+if PvPScalpel_ApplyGarbageCollectionQueue then
+    PvPScalpel_ApplyGarbageCollectionQueue()
+end
+
 SLASH_PVPSCALPELRESET1 = "/pvpsreset"
 SlashCmdList["PVPSCALPELRESET"] = function()
     PvP_Scalpel_DB = {}
+    PvP_Scalpel_GC = {}
     PvPScalpel_Log("database wiped.")
     C_UI.Reload()
 end
@@ -374,6 +380,9 @@ local function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
             return
         end
         table.insert(PvP_Scalpel_DB, match)
+        if type(PvP_Scalpel_GC) == "table" and type(match.matchKey) == "string" and PvP_Scalpel_GC[match.matchKey] == nil then
+            PvP_Scalpel_GC[match.matchKey] = "pending"
+        end
         lastSavedMatchTime = now
         soloShuffleState.saved = true
         PvPScalpel_Log("Solo Shuffle: match saved (" .. tostring(roundsCaptured) .. " rounds)")
@@ -488,6 +497,9 @@ local function TryCaptureMatch(attempt)
             return
         end
         table.insert(PvP_Scalpel_DB, match)
+        if type(PvP_Scalpel_GC) == "table" and type(match.matchKey) == "string" and PvP_Scalpel_GC[match.matchKey] == nil then
+            PvP_Scalpel_GC[match.matchKey] = "pending"
+        end
         lastSavedMatchTime = now
         PvPScalpel_Log("PvP Scalpel: Match saved (" .. #match.players .. " players)")
     end
