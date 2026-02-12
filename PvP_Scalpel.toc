@@ -1,15 +1,16 @@
-## Interface: 120000
-## Version: 0.2.2
+## Interface: 120001
+## Version: 0.2.3
 ## Title: PvP Scalpel
 ## Notes: Tracks PvP match results
 ## Author: Lachezar Stanev
-## SavedVariables: PvP_Scalpel_DB
+## SavedVariables: PvP_Scalpel_DB, PvP_Scalpel_GC
 ## LoadOnDemand: 0
 ## DefaultState: Enabled
 
 src/Scan_Cooldowns.lua
 src/Slugify.lua
 src/Utils.lua
+src/Garbage_Collector.lua
 src/Format_Checker.lua
 src/Match_Length.lua
 src/Get_Stats.lua
