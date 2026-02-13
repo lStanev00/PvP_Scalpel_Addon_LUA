@@ -541,6 +541,9 @@ pvpFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "PVP_MATCH_ACTIVE" then
         PvPScalpel_Log("PVP MATCH ACTIVE detected.")
         PvPScalpel_StartTimeline()
+        if PvPScalpel_DamageMeterResetMatchBuffer then
+            PvPScalpel_DamageMeterResetMatchBuffer()
+        end
         if PvPScalpel_DamageMeterMarkStart then
             PvPScalpel_DamageMeterMarkStart()
         end

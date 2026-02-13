@@ -26,6 +26,7 @@ function PvPScalpel_StartTimeline()
     currentCastRecords = {}
     castRecordByGuid = {}
     currentSpellTotals = {}
+    currentInterruptSpellsBySource = {}
     currentCastOutcomes = {}
     if GetInventoryItemCooldown then
         for _, slot in ipairs(trinketSlots) do
@@ -60,6 +61,9 @@ function PvPScalpel_StopTimeline(match)
     if PvPScalpel_IsTable(currentSpellTotals) then
         match.spellTotals = currentSpellTotals
     end
+    if PvPScalpel_IsTable(currentInterruptSpellsBySource) then
+        match.interruptSpellsBySource = currentInterruptSpellsBySource
+    end
     if PvPScalpel_IsTable(currentCastOutcomes) then
         match.castOutcomes = currentCastOutcomes
     end
@@ -70,6 +74,7 @@ function PvPScalpel_StopTimeline(match)
     currentCastRecords = nil
     castRecordByGuid = {}
     currentSpellTotals = nil
+    currentInterruptSpellsBySource = nil
     currentCastOutcomes = nil
 
     return match
@@ -161,6 +166,73 @@ function PvPScalpel_RecordSpellUtilityTotal(spellID, kind, amount)
             entry.dispels = entry.dispels + amount
         else
             entry.dispels = entry.dispels + 1
+        end
+    end
+end
+
+function PvPScalpel_MergeSpellTotals(sourceTotals)
+    if not PvPScalpel_IsTable(sourceTotals) then return end
+    if not currentSpellTotals then
+        currentSpellTotals = {}
+    end
+
+    for spellID, incoming in pairs(sourceTotals) do
+        if spellID and PvPScalpel_IsTable(incoming) then
+            local entry = currentSpellTotals[spellID]
+            if not entry then
+                entry = {
+                    damage = 0,
+                    healing = 0,
+                    overheal = 0,
+                    absorbed = 0,
+                    hits = 0,
+                    crits = 0,
+                    targets = {},
+                    interrupts = 0,
+                    dispels = 0,
+                }
+                currentSpellTotals[spellID] = entry
+            end
+
+            entry.damage = entry.damage + (incoming.damage or 0)
+            entry.healing = entry.healing + (incoming.healing or 0)
+            entry.overheal = entry.overheal + (incoming.overheal or 0)
+            entry.absorbed = entry.absorbed + (incoming.absorbed or 0)
+            entry.hits = entry.hits + (incoming.hits or 0)
+            entry.crits = entry.crits + (incoming.crits or 0)
+            entry.interrupts = entry.interrupts + (incoming.interrupts or 0)
+            entry.dispels = entry.dispels + (incoming.dispels or 0)
+
+            if PvPScalpel_IsTable(incoming.targets) then
+                for targetName, amount in pairs(incoming.targets) do
+                    if type(targetName) == "string" and targetName ~= "" and PvPScalpel_IsNumber(amount) and amount > 0 then
+                        entry.targets[targetName] = (entry.targets[targetName] or 0) + amount
+                    end
+                end
+            end
+        end
+    end
+end
+
+function PvPScalpel_MergeInterruptSpellsBySource(sourceMap)
+    if not PvPScalpel_IsTable(sourceMap) then return end
+    if not currentInterruptSpellsBySource then
+        currentInterruptSpellsBySource = {}
+    end
+
+    for sourceGUID, spells in pairs(sourceMap) do
+        if type(sourceGUID) == "string" and sourceGUID ~= "" and PvPScalpel_IsTable(spells) then
+            local sourceEntry = currentInterruptSpellsBySource[sourceGUID]
+            if not sourceEntry then
+                sourceEntry = {}
+                currentInterruptSpellsBySource[sourceGUID] = sourceEntry
+            end
+
+            for spellID, count in pairs(spells) do
+                if spellID and PvPScalpel_IsNumber(count) and count > 0 then
+                    sourceEntry[spellID] = (sourceEntry[spellID] or 0) + count
+                end
+            end
         end
     end
 end

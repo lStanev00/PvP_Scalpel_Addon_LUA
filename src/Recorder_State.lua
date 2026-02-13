@@ -9,6 +9,7 @@ currentCastRecords = nil
 castRecordByGuid = {}
 lastMatchWinner = nil
 currentSpellTotals = nil
+currentInterruptSpellsBySource = nil
 currentCastOutcomes = nil
 trinketSlots = { 13, 14 }
 lastTrinketCooldowns = {}

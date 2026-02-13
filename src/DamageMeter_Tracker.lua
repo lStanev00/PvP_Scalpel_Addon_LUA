@@ -7,8 +7,9 @@ local damageMeterPending = false
 local damageMeterAttempts = 0
 local damageMeterSessions = {}
 local damageMeterRecordedSessions = {}
-local damageMeterMissingSourceAttempts = {}
 local damageMeterInCombat = false
+local damageMeterExcludedSessionIds = {}
+local PvPScalpel_DamageMeterStopUpdater
 
 local function PvPScalpel_DamageMeterShouldCollect()
     -- Only collect while the recorder is actively tracking a PvP match.
@@ -92,7 +93,28 @@ end
 
 function PvPScalpel_DamageMeterMarkStart()
     damageMeterStartSessionId = PvPScalpel_DamageMeterGetLatestSessionId() or 0
+    damageMeterExcludedSessionIds = {}
+    local sessions = PvPScalpel_DamageMeterRefreshSessions()
+    for i = 1, #sessions do
+        local sessionId = sessions[i].sessionID
+        if sessionId then
+            damageMeterExcludedSessionIds[sessionId] = true
+        end
+    end
     PvPScalpel_DamageMeterLog("DamageMeter: start session " .. tostring(damageMeterStartSessionId))
+end
+
+function PvPScalpel_DamageMeterResetMatchBuffer()
+    damageMeterSessions = {}
+    damageMeterRecordedSessions = {}
+    damageMeterExcludedSessionIds = {}
+    damageMeterPending = false
+    damageMeterAttempts = 0
+    PvPScalpel_DamageMeterStopUpdater()
+    if damageMeterRetryTicker then
+        damageMeterRetryTicker:Cancel()
+        damageMeterRetryTicker = nil
+    end
 end
 
 local function PvPScalpel_DamageMeterStartUpdater()
@@ -110,7 +132,7 @@ local function PvPScalpel_DamageMeterStartUpdater()
     end)
 end
 
-local function PvPScalpel_DamageMeterStopUpdater()
+PvPScalpel_DamageMeterStopUpdater = function()
     if damageMeterUpdaterTicker then
         damageMeterUpdaterTicker:Cancel()
         damageMeterUpdaterTicker = nil
@@ -123,17 +145,12 @@ local function PvPScalpel_DamageMeterSelectSessions()
         return {}
     end
 
-    local startId = damageMeterStartSessionId or 0
     local selected = {}
     for i = 1, #sessions do
         local sessionId = sessions[i].sessionID
-        if sessionId and sessionId >= startId then
+        if sessionId and not damageMeterExcludedSessionIds[sessionId] then
             table.insert(selected, sessionId)
         end
-    end
-
-    if #selected == 0 then
-        table.insert(selected, sessions[#sessions].sessionID)
     end
 
     table.sort(selected, function(a, b)
@@ -143,51 +160,26 @@ local function PvPScalpel_DamageMeterSelectSessions()
     return selected
 end
 
-local function PvPScalpel_DamageMeterFindPlayerSource(sessionId, playerGuid)
-    if not (C_DamageMeter and C_DamageMeter.GetCombatSessionFromID) then
-        return nil, false, false
+local function PvPScalpel_DamageMeterEnsureSpellEntry(spellTotals, spellID)
+    local entry = spellTotals[spellID]
+    if not entry then
+        entry = {
+            damage = 0,
+            healing = 0,
+            overheal = 0,
+            absorbed = 0,
+            hits = 0,
+            crits = 0,
+            targets = {},
+            interrupts = 0,
+            dispels = 0,
+        }
+        spellTotals[spellID] = entry
     end
-    if issecretvalue and issecretvalue(sessionId) then
-        return nil, true, false
-    end
-
-    local ok, session = pcall(C_DamageMeter.GetCombatSessionFromID, sessionId, Enum.DamageMeterType.DamageDone)
-    if not ok then
-        return nil, false, false
-    end
-    if issecretvalue and issecretvalue(session) then
-        return nil, true, false
-    end
-    if not session or not session.combatSources then
-        return nil, false, false
-    end
-    if issecretvalue and issecretvalue(session.combatSources) then
-        return nil, true, false
-    end
-    if #session.combatSources == 0 then
-        return nil, false, false
-    end
-
-    for i = 1, #session.combatSources do
-        local source = session.combatSources[i]
-        if source then
-            -- Don't touch source.name: it's explicitly ConditionalSecret in API docs.
-            if issecretvalue and (issecretvalue(source) or issecretvalue(source.isLocalPlayer) or issecretvalue(source.sourceGUID)) then
-                return nil, true, false
-            end
-            if source.isLocalPlayer == true then
-                return source, false, true
-            end
-            if playerGuid and source.sourceGUID == playerGuid then
-                return source, false, true
-            end
-        end
-    end
-
-    return nil, false, true
+    return entry
 end
 
-local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterType, sourceGuid, kind)
+local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterType, sourceGuid, kind, sinkTotals, sinkInterruptsBySource)
     if not (C_DamageMeter and C_DamageMeter.GetCombatSessionSourceFromID) then
         return false, 0
     end
@@ -217,16 +209,63 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
                 return false, recorded
             end
             if spell.spellID and type(spell.totalAmount) == "number" and spell.totalAmount > 0 then
+                local entry = PvPScalpel_DamageMeterEnsureSpellEntry(sinkTotals, spell.spellID)
                 recorded = recorded + 1
                 if kind == "damage" then
-                    PvPScalpel_RecordSpellTotal(spell.spellID, nil, spell.totalAmount, 0, 0, 0, false)
+                    entry.damage = entry.damage + spell.totalAmount
+                    entry.hits = entry.hits + 1
                 elseif kind == "healing" then
-                    PvPScalpel_RecordSpellTotal(spell.spellID, nil, 0, spell.totalAmount, 0, 0, false)
+                    entry.healing = entry.healing + spell.totalAmount
+                    entry.hits = entry.hits + 1
                 elseif kind == "absorbs" then
-                    PvPScalpel_RecordSpellTotal(spell.spellID, nil, 0, 0, 0, spell.totalAmount, false)
+                    entry.absorbed = entry.absorbed + spell.totalAmount
+                    entry.hits = entry.hits + 1
                 elseif kind == "interrupts" or kind == "dispels" then
-                    if PvPScalpel_RecordSpellUtilityTotal then
-                        PvPScalpel_RecordSpellUtilityTotal(spell.spellID, kind, spell.totalAmount)
+                    if kind == "interrupts" then
+                        entry.interrupts = entry.interrupts + spell.totalAmount
+                        if sinkInterruptsBySource then
+                            local bySource = sinkInterruptsBySource[sourceGuid]
+                            if not bySource then
+                                bySource = {}
+                                sinkInterruptsBySource[sourceGuid] = bySource
+                            end
+                            bySource[spell.spellID] = (bySource[spell.spellID] or 0) + spell.totalAmount
+                        end
+                    else
+                        entry.dispels = entry.dispels + spell.totalAmount
+                    end
+                end
+
+                if spell.combatSpellDetails ~= nil then
+                    local details = spell.combatSpellDetails
+                    if issecretvalue and issecretvalue(details) then
+                        return false, recorded
+                    end
+
+                    local function RecordDetail(detail)
+                        if not detail then return true end
+                        if issecretvalue and (issecretvalue(detail) or issecretvalue(detail.unitName) or issecretvalue(detail.amount)) then
+                            return false
+                        end
+                        if type(detail.unitName) == "string" and detail.unitName ~= ""
+                            and type(detail.amount) == "number" and detail.amount > 0 then
+                            entry.targets[detail.unitName] = (entry.targets[detail.unitName] or 0) + detail.amount
+                        end
+                        return true
+                    end
+
+                    if type(details) == "table" then
+                        if details.unitName ~= nil or details.amount ~= nil then
+                            if not RecordDetail(details) then
+                                return false, recorded
+                            end
+                        else
+                            for detailIndex = 1, #details do
+                                if not RecordDetail(details[detailIndex]) then
+                                    return false, recorded
+                                end
+                            end
+                        end
                     end
                 end
             end
@@ -236,59 +275,79 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
     return true, recorded
 end
 
-local function PvPScalpel_DamageMeterCollectSession(sessionId, playerGuid)
+local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kind, sinkTotals, sinkInterruptsBySource)
+    local okSession, session = pcall(C_DamageMeter.GetCombatSessionFromID, sessionId, damageMeterType)
+    if not okSession then
+        return false
+    end
+    if issecretvalue and issecretvalue(session) then
+        return false
+    end
+    if not session or not session.combatSources then
+        return true
+    end
+    if issecretvalue and issecretvalue(session.combatSources) then
+        return false
+    end
+
+    for i = 1, #session.combatSources do
+        local source = session.combatSources[i]
+        if source then
+            if issecretvalue and (issecretvalue(source) or issecretvalue(source.sourceGUID) or issecretvalue(source.totalAmount)) then
+                return false
+            end
+
+            local sourceGUID = source.sourceGUID
+            if type(sourceGUID) == "string" and sourceGUID ~= "" then
+                local okType, spellCount = PvPScalpel_DamageMeterRecordSpellTotals(
+                    sessionId,
+                    damageMeterType,
+                    sourceGUID,
+                    kind,
+                    sinkTotals,
+                    sinkInterruptsBySource
+                )
+                if not okType then
+                    return false
+                end
+                if type(source.totalAmount) == "number" and source.totalAmount > 0 and spellCount == 0 then
+                    return false
+                end
+            end
+        end
+    end
+
+    return true
+end
+
+local function PvPScalpel_DamageMeterCollectSession(sessionId)
     if damageMeterRecordedSessions[sessionId] then
         return true
     end
 
-    local source, hasSecrets, isReady = PvPScalpel_DamageMeterFindPlayerSource(sessionId, playerGuid)
-    if hasSecrets then
-        PvPScalpel_DamageMeterLog("DamageMeter: secrets detected for session " .. tostring(sessionId))
-        return false
-    end
-    if not isReady then
-        return false
-    end
-    if not source or not source.sourceGUID then
-        PvPScalpel_DamageMeterLog("DamageMeter: player source not found for session " .. tostring(sessionId))
-        damageMeterMissingSourceAttempts[sessionId] = (damageMeterMissingSourceAttempts[sessionId] or 0) + 1
-        -- If this session never contains a local player (unexpected), don't block the entire capture loop forever.
-        if damageMeterMissingSourceAttempts[sessionId] >= 5 then
-            damageMeterRecordedSessions[sessionId] = true
-            return true
-        end
-        return false
-    end
+    local pendingTotals = {}
+    local pendingInterruptsBySource = {}
+    local okDamage = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.DamageDone, "damage", pendingTotals, pendingInterruptsBySource)
+    if not okDamage then return false end
 
-    PvPScalpel_DamageMeterLog("DamageMeter: player source " .. tostring(source.sourceGUID) .. " session " .. tostring(sessionId))
-
-    -- Record damage first and require spells if total > 0; this prevents saving "too early" while
-    -- the Damage Meter session exists but spells haven't been populated yet.
-    local okDamage, damageCount = PvPScalpel_DamageMeterRecordSpellTotals(
-        sessionId,
-        Enum.DamageMeterType.DamageDone,
-        source.sourceGUID,
-        "damage"
-    )
-    if not okDamage then
-        return false
-    end
-    if type(source.totalAmount) == "number" and source.totalAmount > 0 and damageCount == 0 then
-        PvPScalpel_DamageMeterLog("DamageMeter: damage spells not ready (total>0), retry")
-        return false
-    end
-
-    local okHeal = PvPScalpel_DamageMeterRecordSpellTotals(sessionId, Enum.DamageMeterType.HealingDone, source.sourceGUID, "healing")
+    local okHeal = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.HealingDone, "healing", pendingTotals, pendingInterruptsBySource)
     if not okHeal then return false end
 
-    local okAbs = PvPScalpel_DamageMeterRecordSpellTotals(sessionId, Enum.DamageMeterType.Absorbs, source.sourceGUID, "absorbs")
+    local okAbs = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.Absorbs, "absorbs", pendingTotals, pendingInterruptsBySource)
     if not okAbs then return false end
 
-    local okInt = PvPScalpel_DamageMeterRecordSpellTotals(sessionId, Enum.DamageMeterType.Interrupts, source.sourceGUID, "interrupts")
+    local okInt = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.Interrupts, "interrupts", pendingTotals, pendingInterruptsBySource)
     if not okInt then return false end
 
-    local okDisp = PvPScalpel_DamageMeterRecordSpellTotals(sessionId, Enum.DamageMeterType.Dispels, source.sourceGUID, "dispels")
+    local okDisp = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.Dispels, "dispels", pendingTotals, pendingInterruptsBySource)
     if not okDisp then return false end
+
+    if PvPScalpel_MergeSpellTotals then
+        PvPScalpel_MergeSpellTotals(pendingTotals)
+    end
+    if PvPScalpel_MergeInterruptSpellsBySource then
+        PvPScalpel_MergeInterruptSpellsBySource(pendingInterruptsBySource)
+    end
 
     damageMeterRecordedSessions[sessionId] = true
     return true
@@ -308,11 +367,6 @@ local function PvPScalpel_DamageMeterCollectInternal()
         return false
     end
 
-    local playerGuid = UnitGUID and UnitGUID("player") or nil
-    if not playerGuid then
-        return false
-    end
-
     local sessions = PvPScalpel_DamageMeterSelectSessions()
     if #sessions == 0 then
         PvPScalpel_DamageMeterLog("DamageMeter: no sessions")
@@ -322,7 +376,7 @@ local function PvPScalpel_DamageMeterCollectInternal()
     PvPScalpel_DamageMeterLog("DamageMeter: sessions=" .. tostring(#sessions))
 
     for _, sessionId in ipairs(sessions) do
-        if not PvPScalpel_DamageMeterCollectSession(sessionId, playerGuid) then
+        if not PvPScalpel_DamageMeterCollectSession(sessionId) then
             return false
         end
     end
@@ -391,7 +445,7 @@ local function PvPScalpel_DamageMeterOnEvent(_, event, ...)
     elseif event == "DAMAGE_METER_RESET" then
         damageMeterSessions = {}
         damageMeterRecordedSessions = {}
-        damageMeterMissingSourceAttempts = {}
+        damageMeterExcludedSessionIds = {}
     end
 end
 
