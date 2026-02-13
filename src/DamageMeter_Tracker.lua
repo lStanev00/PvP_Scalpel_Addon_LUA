@@ -161,6 +161,9 @@ local function PvPScalpel_DamageMeterSelectSessions()
 end
 
 local function PvPScalpel_DamageMeterEnsureSpellEntry(spellTotals, spellID)
+    if not spellTotals then
+        return nil
+    end
     local entry = spellTotals[spellID]
     if not entry then
         entry = {
@@ -179,7 +182,19 @@ local function PvPScalpel_DamageMeterEnsureSpellEntry(spellTotals, spellID)
     return entry
 end
 
-local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterType, sourceGuid, kind, sinkTotals, sinkInterruptsBySource)
+local function PvPScalpel_DamageMeterEnsureSourceEntry(sinkTotalsBySource, sourceGuid)
+    if not sinkTotalsBySource then
+        return nil
+    end
+    local sourceEntry = sinkTotalsBySource[sourceGuid]
+    if not sourceEntry then
+        sourceEntry = {}
+        sinkTotalsBySource[sourceGuid] = sourceEntry
+    end
+    return sourceEntry
+end
+
+local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterType, sourceGuid, kind, sinkTotals, sinkTotalsBySource, sinkInterruptsBySource)
     if not (C_DamageMeter and C_DamageMeter.GetCombatSessionSourceFromID) then
         return false, 0
     end
@@ -210,19 +225,47 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
             end
             if spell.spellID and type(spell.totalAmount) == "number" and spell.totalAmount > 0 then
                 local entry = PvPScalpel_DamageMeterEnsureSpellEntry(sinkTotals, spell.spellID)
+                local sourceEntry = nil
+                local sourceBucket = PvPScalpel_DamageMeterEnsureSourceEntry(sinkTotalsBySource, sourceGuid)
+                if sourceBucket then
+                    sourceEntry = PvPScalpel_DamageMeterEnsureSpellEntry(sourceBucket, spell.spellID)
+                end
                 recorded = recorded + 1
                 if kind == "damage" then
-                    entry.damage = entry.damage + spell.totalAmount
-                    entry.hits = entry.hits + 1
+                    if entry then
+                        entry.damage = entry.damage + spell.totalAmount
+                        entry.hits = entry.hits + 1
+                    end
+                    if sourceEntry then
+                        sourceEntry.damage = sourceEntry.damage + spell.totalAmount
+                        sourceEntry.hits = sourceEntry.hits + 1
+                    end
                 elseif kind == "healing" then
-                    entry.healing = entry.healing + spell.totalAmount
-                    entry.hits = entry.hits + 1
+                    if entry then
+                        entry.healing = entry.healing + spell.totalAmount
+                        entry.hits = entry.hits + 1
+                    end
+                    if sourceEntry then
+                        sourceEntry.healing = sourceEntry.healing + spell.totalAmount
+                        sourceEntry.hits = sourceEntry.hits + 1
+                    end
                 elseif kind == "absorbs" then
-                    entry.absorbed = entry.absorbed + spell.totalAmount
-                    entry.hits = entry.hits + 1
+                    if entry then
+                        entry.absorbed = entry.absorbed + spell.totalAmount
+                        entry.hits = entry.hits + 1
+                    end
+                    if sourceEntry then
+                        sourceEntry.absorbed = sourceEntry.absorbed + spell.totalAmount
+                        sourceEntry.hits = sourceEntry.hits + 1
+                    end
                 elseif kind == "interrupts" or kind == "dispels" then
                     if kind == "interrupts" then
-                        entry.interrupts = entry.interrupts + spell.totalAmount
+                        if entry then
+                            entry.interrupts = entry.interrupts + spell.totalAmount
+                        end
+                        if sourceEntry then
+                            sourceEntry.interrupts = sourceEntry.interrupts + spell.totalAmount
+                        end
                         if sinkInterruptsBySource then
                             local bySource = sinkInterruptsBySource[sourceGuid]
                             if not bySource then
@@ -232,7 +275,12 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
                             bySource[spell.spellID] = (bySource[spell.spellID] or 0) + spell.totalAmount
                         end
                     else
-                        entry.dispels = entry.dispels + spell.totalAmount
+                        if entry then
+                            entry.dispels = entry.dispels + spell.totalAmount
+                        end
+                        if sourceEntry then
+                            sourceEntry.dispels = sourceEntry.dispels + spell.totalAmount
+                        end
                     end
                 end
 
@@ -249,7 +297,12 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
                         end
                         if type(detail.unitName) == "string" and detail.unitName ~= ""
                             and type(detail.amount) == "number" and detail.amount > 0 then
-                            entry.targets[detail.unitName] = (entry.targets[detail.unitName] or 0) + detail.amount
+                            if entry then
+                                entry.targets[detail.unitName] = (entry.targets[detail.unitName] or 0) + detail.amount
+                            end
+                            if sourceEntry then
+                                sourceEntry.targets[detail.unitName] = (sourceEntry.targets[detail.unitName] or 0) + detail.amount
+                            end
                         end
                         return true
                     end
@@ -275,7 +328,7 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
     return true, recorded
 end
 
-local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kind, sinkTotals, sinkInterruptsBySource)
+local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kind, sinkTotals, sinkTotalsBySource, sinkInterruptsBySource)
     local okSession, session = pcall(C_DamageMeter.GetCombatSessionFromID, sessionId, damageMeterType)
     if not okSession then
         return false
@@ -305,6 +358,7 @@ local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kin
                     sourceGUID,
                     kind,
                     sinkTotals,
+                    sinkTotalsBySource,
                     sinkInterruptsBySource
                 )
                 if not okType then
@@ -325,25 +379,26 @@ local function PvPScalpel_DamageMeterCollectSession(sessionId)
         return true
     end
 
-    local pendingTotals = {}
+    local pendingTotals = nil
+    local pendingTotalsBySource = {}
     local pendingInterruptsBySource = {}
-    local okDamage = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.DamageDone, "damage", pendingTotals, pendingInterruptsBySource)
+    local okDamage = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.DamageDone, "damage", pendingTotals, pendingTotalsBySource, pendingInterruptsBySource)
     if not okDamage then return false end
 
-    local okHeal = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.HealingDone, "healing", pendingTotals, pendingInterruptsBySource)
+    local okHeal = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.HealingDone, "healing", pendingTotals, pendingTotalsBySource, pendingInterruptsBySource)
     if not okHeal then return false end
 
-    local okAbs = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.Absorbs, "absorbs", pendingTotals, pendingInterruptsBySource)
+    local okAbs = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.Absorbs, "absorbs", pendingTotals, pendingTotalsBySource, pendingInterruptsBySource)
     if not okAbs then return false end
 
-    local okInt = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.Interrupts, "interrupts", pendingTotals, pendingInterruptsBySource)
+    local okInt = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.Interrupts, "interrupts", pendingTotals, pendingTotalsBySource, pendingInterruptsBySource)
     if not okInt then return false end
 
-    local okDisp = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.Dispels, "dispels", pendingTotals, pendingInterruptsBySource)
+    local okDisp = PvPScalpel_DamageMeterCollectType(sessionId, Enum.DamageMeterType.Dispels, "dispels", pendingTotals, pendingTotalsBySource, pendingInterruptsBySource)
     if not okDisp then return false end
 
-    if PvPScalpel_MergeSpellTotals then
-        PvPScalpel_MergeSpellTotals(pendingTotals)
+    if PvPScalpel_MergeSpellTotalsBySource then
+        PvPScalpel_MergeSpellTotalsBySource(pendingTotalsBySource)
     end
     if PvPScalpel_MergeInterruptSpellsBySource then
         PvPScalpel_MergeInterruptSpellsBySource(pendingInterruptsBySource)

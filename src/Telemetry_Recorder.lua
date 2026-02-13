@@ -25,7 +25,7 @@ function PvPScalpel_StartTimeline()
     castTargetSnapshotByGuid = {}
     currentCastRecords = {}
     castRecordByGuid = {}
-    currentSpellTotals = {}
+    currentSpellTotalsBySource = {}
     currentInterruptSpellsBySource = {}
     currentCastOutcomes = {}
     if GetInventoryItemCooldown then
@@ -58,8 +58,8 @@ function PvPScalpel_StopTimeline(match)
 
     match.timeline = currentTimeline
     match.castRecords = currentCastRecords
-    if PvPScalpel_IsTable(currentSpellTotals) then
-        match.spellTotals = currentSpellTotals
+    if PvPScalpel_IsTable(currentSpellTotalsBySource) then
+        match.spellTotalsBySource = currentSpellTotalsBySource
     end
     if PvPScalpel_IsTable(currentInterruptSpellsBySource) then
         match.interruptSpellsBySource = currentInterruptSpellsBySource
@@ -73,7 +73,7 @@ function PvPScalpel_StopTimeline(match)
     currentMatchKey = nil
     currentCastRecords = nil
     castRecordByGuid = {}
-    currentSpellTotals = nil
+    currentSpellTotalsBySource = nil
     currentInterruptSpellsBySource = nil
     currentCastOutcomes = nil
 
@@ -207,6 +207,60 @@ function PvPScalpel_MergeSpellTotals(sourceTotals)
                 for targetName, amount in pairs(incoming.targets) do
                     if type(targetName) == "string" and targetName ~= "" and PvPScalpel_IsNumber(amount) and amount > 0 then
                         entry.targets[targetName] = (entry.targets[targetName] or 0) + amount
+                    end
+                end
+            end
+        end
+    end
+end
+
+function PvPScalpel_MergeSpellTotalsBySource(sourceMap)
+    if not PvPScalpel_IsTable(sourceMap) then return end
+    if not currentSpellTotalsBySource then
+        currentSpellTotalsBySource = {}
+    end
+
+    for sourceGUID, spells in pairs(sourceMap) do
+        if type(sourceGUID) == "string" and sourceGUID ~= "" and PvPScalpel_IsTable(spells) then
+            local sourceEntry = currentSpellTotalsBySource[sourceGUID]
+            if not sourceEntry then
+                sourceEntry = {}
+                currentSpellTotalsBySource[sourceGUID] = sourceEntry
+            end
+
+            for spellID, incoming in pairs(spells) do
+                if spellID and PvPScalpel_IsTable(incoming) then
+                    local entry = sourceEntry[spellID]
+                    if not entry then
+                        entry = {
+                            damage = 0,
+                            healing = 0,
+                            overheal = 0,
+                            absorbed = 0,
+                            hits = 0,
+                            crits = 0,
+                            targets = {},
+                            interrupts = 0,
+                            dispels = 0,
+                        }
+                        sourceEntry[spellID] = entry
+                    end
+
+                    entry.damage = entry.damage + (incoming.damage or 0)
+                    entry.healing = entry.healing + (incoming.healing or 0)
+                    entry.overheal = entry.overheal + (incoming.overheal or 0)
+                    entry.absorbed = entry.absorbed + (incoming.absorbed or 0)
+                    entry.hits = entry.hits + (incoming.hits or 0)
+                    entry.crits = entry.crits + (incoming.crits or 0)
+                    entry.interrupts = entry.interrupts + (incoming.interrupts or 0)
+                    entry.dispels = entry.dispels + (incoming.dispels or 0)
+
+                    if PvPScalpel_IsTable(incoming.targets) then
+                        for targetName, amount in pairs(incoming.targets) do
+                            if type(targetName) == "string" and targetName ~= "" and PvPScalpel_IsNumber(amount) and amount > 0 then
+                                entry.targets[targetName] = (entry.targets[targetName] or 0) + amount
+                            end
+                        end
                     end
                 end
             end
