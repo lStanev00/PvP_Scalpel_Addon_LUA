@@ -10,6 +10,14 @@ local damageMeterRecordedSessions = {}
 local damageMeterInCombat = false
 local damageMeterExcludedSessionIds = {}
 local PvPScalpel_DamageMeterStopUpdater
+local damageMeterKickStatsBySource = {}
+
+local function PvPScalpel_DamageMeterNormalizeInterruptCount(value)
+    if type(value) ~= "number" or value <= 0 then
+        return 0
+    end
+    return math.floor(value)
+end
 
 local function PvPScalpel_DamageMeterShouldCollect()
     -- Only collect while the recorder is actively tracking a PvP match.
@@ -94,6 +102,7 @@ end
 function PvPScalpel_DamageMeterMarkStart()
     damageMeterStartSessionId = PvPScalpel_DamageMeterGetLatestSessionId() or 0
     damageMeterExcludedSessionIds = {}
+    damageMeterKickStatsBySource = {}
     local sessions = PvPScalpel_DamageMeterRefreshSessions()
     for i = 1, #sessions do
         local sessionId = sessions[i].sessionID
@@ -108,6 +117,7 @@ function PvPScalpel_DamageMeterResetMatchBuffer()
     damageMeterSessions = {}
     damageMeterRecordedSessions = {}
     damageMeterExcludedSessionIds = {}
+    damageMeterKickStatsBySource = {}
     damageMeterPending = false
     damageMeterAttempts = 0
     PvPScalpel_DamageMeterStopUpdater()
@@ -216,6 +226,7 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
     end
 
     local recorded = 0
+    local summedAmount = 0
     for i = 1, #sessionSource.combatSpells do
         local spell = sessionSource.combatSpells[i]
         if spell then
@@ -231,6 +242,7 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
                     sourceEntry = PvPScalpel_DamageMeterEnsureSpellEntry(sourceBucket, spell.spellID)
                 end
                 recorded = recorded + 1
+                summedAmount = summedAmount + spell.totalAmount
                 if kind == "damage" then
                     if entry then
                         entry.damage = entry.damage + spell.totalAmount
@@ -287,7 +299,7 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
                 if spell.combatSpellDetails ~= nil then
                     local details = spell.combatSpellDetails
                     if issecretvalue and issecretvalue(details) then
-                        return false, recorded
+                        return false, recorded, summedAmount
                     end
 
                     local function RecordDetail(detail)
@@ -310,12 +322,12 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
                     if type(details) == "table" then
                         if details.unitName ~= nil or details.amount ~= nil then
                             if not RecordDetail(details) then
-                                return false, recorded
+                                return false, recorded, summedAmount
                             end
                         else
                             for detailIndex = 1, #details do
                                 if not RecordDetail(details[detailIndex]) then
-                                    return false, recorded
+                                    return false, recorded, summedAmount
                                 end
                             end
                         end
@@ -325,7 +337,7 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
         end
     end
 
-    return true, recorded
+    return true, recorded, summedAmount
 end
 
 local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kind, sinkTotals, sinkTotalsBySource, sinkInterruptsBySource)
@@ -352,7 +364,7 @@ local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kin
 
             local sourceGUID = source.sourceGUID
             if type(sourceGUID) == "string" and sourceGUID ~= "" then
-                local okType, spellCount = PvPScalpel_DamageMeterRecordSpellTotals(
+                local okType, spellCount, landedAmount = PvPScalpel_DamageMeterRecordSpellTotals(
                     sessionId,
                     damageMeterType,
                     sourceGUID,
@@ -364,14 +376,141 @@ local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kin
                 if not okType then
                     return false
                 end
-                if type(source.totalAmount) == "number" and source.totalAmount > 0 and spellCount == 0 then
+                landedAmount = landedAmount or 0
+                if kind ~= "interrupts" and type(source.totalAmount) == "number" and source.totalAmount > 0 and spellCount == 0 then
                     return false
+                end
+                if kind == "interrupts" then
+                    local issuedAmount = 0
+                    if type(source.totalAmount) == "number" and source.totalAmount > 0 then
+                        issuedAmount = source.totalAmount
+                    end
+                    local kickEntry = damageMeterKickStatsBySource[sourceGUID]
+                    if not kickEntry then
+                        kickEntry = { issued = 0, landed = 0 }
+                        damageMeterKickStatsBySource[sourceGUID] = kickEntry
+                    end
+                    kickEntry.issued = kickEntry.issued + issuedAmount
+                    kickEntry.landed = kickEntry.landed + landedAmount
                 end
             end
         end
     end
 
     return true
+end
+
+function PvPScalpel_DamageMeterLogKickSummary()
+    if not PvPScalpel_Debug then
+        return
+    end
+    if not damageMeterKickStatsBySource then
+        return
+    end
+
+    local guidToName = {}
+    local scoreboardGuids = {}
+    if C_PvP and C_PvP.GetScoreInfo and GetNumBattlefieldScores then
+        local totalPlayers = GetNumBattlefieldScores() or 0
+        for i = 1, totalPlayers do
+            local score = C_PvP.GetScoreInfo(i)
+            if score and type(score.guid) == "string" and score.guid ~= "" then
+                scoreboardGuids[score.guid] = true
+                local playerName = score.name or score.playerName
+                if type(playerName) == "string" and playerName ~= "" then
+                    local shortName = playerName
+                    local dash = shortName:find("-", 1, true)
+                    if dash then
+                        shortName = shortName:sub(1, dash - 1)
+                    end
+                    guidToName[score.guid] = shortName
+                end
+            end
+        end
+    end
+
+    local rows = {}
+    for sourceGUID, _ in pairs(scoreboardGuids) do
+        local stats = damageMeterKickStatsBySource[sourceGUID]
+        local issued = 0
+        local landed = 0
+        if type(stats) == "table" then
+            if type(stats.issued) == "number" and stats.issued > 0 then
+                issued = stats.issued
+            end
+            if type(stats.landed) == "number" and stats.landed > 0 then
+                landed = stats.landed
+            end
+        end
+        local failed = issued - landed
+        if failed < 0 then
+            failed = 0
+        end
+        table.insert(rows, {
+            name = guidToName[sourceGUID] or sourceGUID,
+            issued = issued,
+            landed = landed,
+            failed = failed,
+        })
+    end
+
+    for sourceGUID, stats in pairs(damageMeterKickStatsBySource) do
+        if type(sourceGUID) == "string" and type(stats) == "table" and not scoreboardGuids[sourceGUID] then
+            local issued = 0
+            local landed = 0
+            if type(stats.issued) == "number" and stats.issued > 0 then
+                issued = stats.issued
+            end
+            if type(stats.landed) == "number" and stats.landed > 0 then
+                landed = stats.landed
+            end
+            local failed = issued - landed
+            if failed < 0 then
+                failed = 0
+            end
+            local displayName = guidToName[sourceGUID] or sourceGUID
+            table.insert(rows, {
+                name = displayName,
+                issued = issued,
+                landed = landed,
+                failed = failed,
+            })
+        end
+    end
+
+    table.sort(rows, function(a, b)
+        if a.issued ~= b.issued then
+            return a.issued > b.issued
+        end
+        return a.name < b.name
+    end)
+
+    PvPScalpel_DamageMeterLog("Kick summary (issued / landed / failed):")
+    if #rows == 0 then
+        PvPScalpel_DamageMeterLog("  no interrupt sources in this match")
+        return
+    end
+    for i = 1, #rows do
+        local row = rows[i]
+        PvPScalpel_DamageMeterLog(string.format("  %s - %d / %d / %d", row.name, row.issued, row.landed, row.failed))
+    end
+end
+
+function PvPScalpel_DamageMeterGetInterruptTotalsForSource(sourceGUID)
+    if type(sourceGUID) ~= "string" or sourceGUID == "" then
+        return 0, 0
+    end
+    local stats = damageMeterKickStatsBySource[sourceGUID]
+    if type(stats) ~= "table" then
+        return 0, 0
+    end
+
+    local total = PvPScalpel_DamageMeterNormalizeInterruptCount(stats.issued)
+    local landed = PvPScalpel_DamageMeterNormalizeInterruptCount(stats.landed)
+    if landed > total then
+        landed = total
+    end
+    return total, landed
 end
 
 local function PvPScalpel_DamageMeterCollectSession(sessionId)
@@ -501,6 +640,7 @@ local function PvPScalpel_DamageMeterOnEvent(_, event, ...)
         damageMeterSessions = {}
         damageMeterRecordedSessions = {}
         damageMeterExcludedSessionIds = {}
+        damageMeterKickStatsBySource = {}
     end
 end
 

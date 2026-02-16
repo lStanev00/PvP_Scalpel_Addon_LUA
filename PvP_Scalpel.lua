@@ -28,6 +28,25 @@ SlashCmdList["PVPSCALPELDEBUG"] = function()
     end
 end
 
+SLASH_PVPSCALPELCOUNT1 = "/pvpscount"
+SLASH_PVPSCALPELCOUNT2 = "/pvpslen"
+SlashCmdList["PVPSCALPELCOUNT"] = function()
+    local count = 0
+    if PvPScalpel_IsTable and PvPScalpel_IsTable(PvP_Scalpel_DB) then
+        count = #PvP_Scalpel_DB
+    elseif type(PvP_Scalpel_DB) == "table" then
+        count = #PvP_Scalpel_DB
+    end
+
+    local prefix = "|cff00ff98[PvP Scalpel]|r "
+    local msg = "Recorded matches: " .. tostring(count)
+    if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+        DEFAULT_CHAT_FRAME:AddMessage(prefix .. msg)
+    else
+        print(prefix .. msg)
+    end
+end
+
 
 local isTracking = false
 
@@ -110,6 +129,25 @@ local function PvPScalpel_PrepareScoreboardRead()
     end
 end
 
+local function PvPScalpel_BuildInterruptSummary(sourceGUID)
+    local total = 0
+    local landed = 0
+    if PvPScalpel_DamageMeterGetInterruptTotalsForSource then
+        local rawTotal, rawLanded = PvPScalpel_DamageMeterGetInterruptTotalsForSource(sourceGUID)
+        if type(rawTotal) == "number" and rawTotal > 0 then
+            total = rawTotal
+        end
+        if type(rawLanded) == "number" and rawLanded > 0 then
+            landed = rawLanded
+        end
+    end
+    if landed > total then
+        landed = total
+    end
+    -- Compact player-level interrupt payload: [total, landed]
+    return { total, landed }
+end
+
 local function PvPScalpel_BuildScoreSnapshot()
     PvPScalpel_PrepareScoreboardRead()
     local totalPlayers = GetNumBattlefieldScores()
@@ -153,6 +191,7 @@ local function PvPScalpel_BuildScoreSnapshot()
                 healingDone = score.healingDone,
                 killingBlows = score.killingBlows,
                 deaths = score.deaths,
+                interrupts = PvPScalpel_BuildInterruptSummary(score.guid),
                 stats = statValues,
             })
         else
@@ -260,6 +299,7 @@ local function PvPScalpel_BuildSoloShufflePlayers()
                 healing = score.healingDone,
                 kills = score.killingBlows,
                 deaths = score.deaths,
+                interrupts = PvPScalpel_BuildInterruptSummary(score.guid),
                 MSS = PvPScalpel_GetMapStatsForIndex(i),
                 isOwner = (curentPlayerName == playerName),
             }
@@ -443,6 +483,7 @@ local function TryCaptureMatch(attempt)
                 healing = score.healingDone,
                 kills = score.killingBlows,
                 deaths = score.deaths,
+                interrupts = PvPScalpel_BuildInterruptSummary(score.guid),
                 MSS = mapSpecificStats,
                 isOwner = (curentPlayerName == playerName),
             }
@@ -580,6 +621,9 @@ pvpFrame:SetScript("OnEvent", function(_, event, ...)
 
         C_Timer.After(0.5, function()
             local function finalizeMatch()
+                if PvPScalpel_DamageMeterLogKickSummary then
+                    PvPScalpel_DamageMeterLogKickSummary()
+                end
                 PvPScalpel_Log("Capturing match summary...")
                 if PvPScalpel_IsRatedSoloShuffle() then
                     PvPScalpel_HandleSoloShuffleStateChange()
