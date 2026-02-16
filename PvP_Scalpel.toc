@@ -1,5 +1,5 @@
 ## Interface: 120001
-## Version: 0.2.3
+## Version: 0.3.0
 ## Title: PvP Scalpel
 ## Notes: Tracks PvP match results
 ## Author: Lachezar Stanev
