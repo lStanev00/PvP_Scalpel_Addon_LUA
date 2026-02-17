@@ -42,12 +42,65 @@ local function PvPScalpel_HandleCount()
     PvPScalpel_CommandPrint("Recorded matches: " .. tostring(count))
 end
 
+local function PvPScalpel_GetSpellNameByID(spellID)
+    if type(spellID) ~= "number" then
+        return nil
+    end
+
+    if C_Spell and C_Spell.GetSpellName then
+        local ok, spellName = pcall(C_Spell.GetSpellName, spellID)
+        if ok and type(spellName) == "string" and spellName ~= "" then
+            return spellName
+        end
+    end
+
+    if GetSpellInfo then
+        local ok, spellName = pcall(GetSpellInfo, spellID)
+        if ok and type(spellName) == "string" and spellName ~= "" then
+            return spellName
+        end
+    end
+
+    return nil
+end
+
+local function PvPScalpel_HandleKickDump()
+    if type(PvP_Scalpel_InteruptSpells) ~= "table" or #PvP_Scalpel_InteruptSpells == 0 then
+        PvPScalpel_CommandPrint("Kick table is empty.")
+        return
+    end
+
+    local uniqueIDs = {}
+    local ids = {}
+    for i = 1, #PvP_Scalpel_InteruptSpells do
+        local spellID = PvP_Scalpel_InteruptSpells[i]
+        if type(spellID) == "number" and not uniqueIDs[spellID] then
+            uniqueIDs[spellID] = true
+            table.insert(ids, spellID)
+        end
+    end
+    table.sort(ids)
+
+    if #ids == 0 then
+        PvPScalpel_CommandPrint("Kick table has no numeric spell IDs.")
+        return
+    end
+
+    PvPScalpel_CommandPrint("Kick spells (id => name):")
+    for i = 1, #ids do
+        local spellID = ids[i]
+        local spellName = PvPScalpel_GetSpellNameByID(spellID) or "UnknownSpell"
+        PvPScalpel_CommandPrint(tostring(spellID) .. " => " .. spellName)
+    end
+end
+
 local commandDocs = {
     { command = "/pvps-help", activity = "List all slash commands and what each command does." },
     { command = "/pvps-reset", activity = "Wipe addon SavedVariables and reload the UI." },
     { command = "/pvps-debug", activity = "Toggle debug log output in chat." },
     { command = "/pvps-count", activity = "Print number of recorded matches." },
     { command = "/pvps-len", activity = "Alias of /pvpscount." },
+    { command = "/pvps-kickdump", activity = "Dump known kick spell IDs and resolved spell names." },
 }
 
 local function PvPScalpel_HandleHelp()
@@ -73,3 +126,6 @@ SlashCmdList["PVPSCALPELDEBUG"] = PvPScalpel_HandleDebugToggle
 SLASH_PVPSCALPELCOUNT1 = "/pvps-count"
 SLASH_PVPSCALPELCOUNT2 = "/pvp-slen"
 SlashCmdList["PVPSCALPELCOUNT"] = PvPScalpel_HandleCount
+
+SLASH_PVPSCALPELKICKDUMP1 = "/pvps-kickdump"
+SlashCmdList["PVPSCALPELKICKDUMP"] = PvPScalpel_HandleKickDump
