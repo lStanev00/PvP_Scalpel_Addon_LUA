@@ -19,4 +19,5 @@ src/Recorder_State.lua
 src/Telemetry_Recorder.lua
 src/Spell_Tracker.lua
 src/DamageMeter_Tracker.lua
+src/Interrupt_Action_Scanner.lua
 PvP_Scalpel.lua
