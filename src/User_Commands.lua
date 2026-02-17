@@ -60,6 +60,8 @@ end
 
 SLASH_PVPSCALPELHELP1 = "/pvps-help"
 SLASH_PVPSCALPELHELP2 = "/pvpshelp"
+SLASH_PVPSCALPELHELP3 = "/pvps-?"
+SLASH_PVPSCALPELHELP4 = "/pvps?"
 SlashCmdList["PVPSCALPELHELP"] = PvPScalpel_HandleHelp
 
 SLASH_PVPSCALPELRESET1 = "/pvps-reset"
