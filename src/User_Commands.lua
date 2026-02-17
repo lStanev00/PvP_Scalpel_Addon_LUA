@@ -44,10 +44,10 @@ end
 
 local commandDocs = {
     { command = "/pvps-help", activity = "List all slash commands and what each command does." },
-    { command = "/pvpsreset", activity = "Wipe addon SavedVariables and reload the UI." },
-    { command = "/pvpsdebug", activity = "Toggle debug log output in chat." },
-    { command = "/pvpscount", activity = "Print number of recorded matches." },
-    { command = "/pvpslen", activity = "Alias of /pvpscount." },
+    { command = "/pvps-reset", activity = "Wipe addon SavedVariables and reload the UI." },
+    { command = "/pvps-debug", activity = "Toggle debug log output in chat." },
+    { command = "/pvps-count", activity = "Print number of recorded matches." },
+    { command = "/pvps-len", activity = "Alias of /pvpscount." },
 }
 
 local function PvPScalpel_HandleHelp()
