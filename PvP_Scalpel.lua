@@ -1,52 +1,10 @@
 PvP_Scalpel_DB = PvP_Scalpel_DB or {}
+PvP_Scalpel_InteruptSpells = PvP_Scalpel_InteruptSpells or {}
 
 PvP_Scalpel_GC = PvP_Scalpel_GC or {}
 if PvPScalpel_ApplyGarbageCollectionQueue then
     PvPScalpel_ApplyGarbageCollectionQueue()
 end
-
-SLASH_PVPSCALPELRESET1 = "/pvpsreset"
-SlashCmdList["PVPSCALPELRESET"] = function()
-    PvP_Scalpel_DB = {}
-    PvP_Scalpel_GC = {}
-    PvPScalpel_Log("database wiped.")
-    C_UI.Reload()
-end
-
-SLASH_PVPSCALPELDEBUG1 = "/pvpsdebug"
-SlashCmdList["PVPSCALPELDEBUG"] = function()
-    if PvPScalpel_Debug == nil then
-        PvPScalpel_Debug = true
-    else
-        PvPScalpel_Debug = not PvPScalpel_Debug
-    end
-    local prefix = "|cff00ff98[PvP Scalpel]|r "
-    if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
-        DEFAULT_CHAT_FRAME:AddMessage(prefix .. "Debug logging: " .. tostring(PvPScalpel_Debug))
-    else
-        print(prefix .. "Debug logging: " .. tostring(PvPScalpel_Debug))
-    end
-end
-
-SLASH_PVPSCALPELCOUNT1 = "/pvpscount"
-SLASH_PVPSCALPELCOUNT2 = "/pvpslen"
-SlashCmdList["PVPSCALPELCOUNT"] = function()
-    local count = 0
-    if PvPScalpel_IsTable and PvPScalpel_IsTable(PvP_Scalpel_DB) then
-        count = #PvP_Scalpel_DB
-    elseif type(PvP_Scalpel_DB) == "table" then
-        count = #PvP_Scalpel_DB
-    end
-
-    local prefix = "|cff00ff98[PvP Scalpel]|r "
-    local msg = "Recorded matches: " .. tostring(count)
-    if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
-        DEFAULT_CHAT_FRAME:AddMessage(prefix .. msg)
-    else
-        print(prefix .. msg)
-    end
-end
-
 
 local isTracking = false
 
