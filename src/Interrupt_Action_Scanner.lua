@@ -24,6 +24,15 @@ local function PvPScalpel_DescriptionLooksInterrupt(description)
         return true
     end
 
+    -- Counter-style wording used by some interrupt abilities/tooltips.
+    if text:find("counterspell", 1, true) or text:find("counter shot", 1, true) then
+        return true
+    end
+    if text:find("counter", 1, true)
+        and (text:find("spell", 1, true) or text:find("casting", 1, true) or text:find("cast", 1, true)) then
+        return true
+    end
+
     return false
 end
 
@@ -130,7 +139,21 @@ function PvPScalpel_ScanInterruptActions()
         end
 
         local okInfo, actionType, actionID = pcall(GetActionInfo, slotID)
-        if not okInfo or actionType ~= "spell" or type(actionID) ~= "number" then
+        if not okInfo or type(actionType) ~= "string" then
+            return
+        end
+
+        local candidateSpellID = nil
+        if actionType == "spell" and type(actionID) == "number" then
+            candidateSpellID = actionID
+        elseif actionType == "pet" and type(actionID) == "number" and GetPetActionInfo then
+            local okPet, _, _, _, _, _, petSpellID = pcall(GetPetActionInfo, actionID)
+            if okPet and type(petSpellID) == "number" then
+                candidateSpellID = petSpellID
+            end
+        end
+
+        if type(candidateSpellID) ~= "number" then
             return
         end
 
@@ -140,14 +163,14 @@ function PvPScalpel_ScanInterruptActions()
             byActionFlag = true
         end
 
-        local byDescription = PvPScalpel_IsInterruptByDescription(actionID)
+        local byDescription = PvPScalpel_IsInterruptByDescription(candidateSpellID)
         if not byActionFlag and not byDescription then
             return
         end
 
-        if not knownIDs[actionID] then
-            table.insert(PvP_Scalpel_InteruptSpells, actionID)
-            knownIDs[actionID] = true
+        if not knownIDs[candidateSpellID] then
+            table.insert(PvP_Scalpel_InteruptSpells, candidateSpellID)
+            knownIDs[candidateSpellID] = true
         end
     end
 
@@ -161,6 +184,21 @@ function PvPScalpel_ScanInterruptActions()
     local buttonPrefixes = nil
     if ActionButtonUtil and type(ActionButtonUtil.ActionBarButtonNames) == "table" then
         buttonPrefixes = ActionButtonUtil.ActionBarButtonNames
+        local hasPetPrefix = false
+        for i = 1, #buttonPrefixes do
+            if buttonPrefixes[i] == "PetActionButton" then
+                hasPetPrefix = true
+                break
+            end
+        end
+        if not hasPetPrefix then
+            local extended = {}
+            for i = 1, #buttonPrefixes do
+                extended[#extended + 1] = buttonPrefixes[i]
+            end
+            extended[#extended + 1] = "PetActionButton"
+            buttonPrefixes = extended
+        end
     else
         buttonPrefixes = {
             "ActionButton",
@@ -171,6 +209,7 @@ function PvPScalpel_ScanInterruptActions()
             "MultiBar5Button",
             "MultiBar6Button",
             "MultiBar7Button",
+            "PetActionButton",
         }
     end
 
@@ -219,6 +258,29 @@ function PvPScalpel_ScanInterruptActions()
                 end
             end
         end
+
+        if C_SpellBook.HasPetSpells and Enum.SpellBookSpellBank.Pet then
+            local okPet, numPetSpells = pcall(C_SpellBook.HasPetSpells)
+            if okPet and type(numPetSpells) == "number" and numPetSpells > 0 then
+                local petBank = Enum.SpellBookSpellBank.Pet
+                for slotIndex = 1, numPetSpells do
+                    local okType, _, actionID, spellID = pcall(C_SpellBook.GetSpellBookItemType, slotIndex, petBank)
+                    if okType then
+                        local candidateID = nil
+                        if type(spellID) == "number" then
+                            candidateID = spellID
+                        elseif type(actionID) == "number" then
+                            candidateID = actionID
+                        end
+
+                        if candidateID and not knownIDs[candidateID] and PvPScalpel_IsInterruptByDescription(candidateID) then
+                            table.insert(PvP_Scalpel_InteruptSpells, candidateID)
+                            knownIDs[candidateID] = true
+                        end
+                    end
+                end
+            end
+        end
     end
 end
 
@@ -228,8 +290,13 @@ if interruptActionFrame then
     interruptActionFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
     interruptActionFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
     interruptActionFrame:RegisterEvent("SPELLS_CHANGED")
+    interruptActionFrame:RegisterEvent("UNIT_PET")
+    interruptActionFrame:RegisterEvent("PET_BAR_UPDATE")
     interruptActionFrame:SetScript("OnEvent", function(_, event, unit)
         if event == "PLAYER_SPECIALIZATION_CHANGED" and unit and unit ~= "player" then
+            return
+        end
+        if event == "UNIT_PET" and unit and unit ~= "player" then
             return
         end
 
@@ -237,7 +304,9 @@ if interruptActionFrame then
             or event == "PLAYER_SPECIALIZATION_CHANGED"
             or event == "SPELLS_CHANGED"
             or event == "PLAYER_ENTERING_WORLD"
-            or event == "PLAYER_LOGIN" then
+            or event == "PLAYER_LOGIN"
+            or event == "UNIT_PET"
+            or event == "PET_BAR_UPDATE" then
             interruptDescriptionCache = {}
         end
 
