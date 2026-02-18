@@ -535,14 +535,15 @@ function PvPScalpel_DamageMeterLogKickSummary()
         return a.name < b.name
     end)
 
-    PvPScalpel_DamageMeterLog("Kick summary (issued / landed / failed):")
+    PvPScalpel_DamageMeterLog("Kick summary (casted / succeeded):")
+    PvPScalpel_DamageMeterLog("  Note: failed kicks are computed in the desktop application.")
     if #rows == 0 then
         PvPScalpel_DamageMeterLog("  no interrupt sources in this match")
         return
     end
     for i = 1, #rows do
         local row = rows[i]
-        PvPScalpel_DamageMeterLog(string.format("  %s - %d / %d / %d", row.name, row.issued, row.landed, row.failed))
+        PvPScalpel_DamageMeterLog(string.format("  %s - %d / %d", row.name, row.issued, row.landed))
     end
 end
 
