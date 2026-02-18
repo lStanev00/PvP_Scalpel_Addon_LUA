@@ -228,6 +228,32 @@ local curentPlayerName = UnitFullName("player");
 
 local lastSavedMatchTime = nil
 
+local function PvPScalpel_AbortActiveCapture(reason)
+    local hasTimeline = (type(currentTimeline) == "table")
+    local hasTimelineStart = (type(timelineStart) == "number")
+    if not hasTimeline and not hasTimelineStart and not isTracking then
+        return
+    end
+
+    if reason and PvPScalpel_Log then
+        PvPScalpel_Log("PvPScalpel: aborting active capture (" .. tostring(reason) .. ")")
+    end
+
+    if PvPScalpel_DisableSpellTracking then
+        PvPScalpel_DisableSpellTracking()
+    end
+    if PvPScalpel_DamageMeterResetMatchBuffer then
+        PvPScalpel_DamageMeterResetMatchBuffer()
+    end
+    if PvPScalpel_StopTimeline then
+        -- Drop in-memory timeline/cast buffers when a match does not complete normally.
+        PvPScalpel_StopTimeline(nil)
+    end
+
+    PvPScalpel_ResetSoloShuffleState()
+    isTracking = false
+end
+
 local function PvPScalpel_BuildSoloShufflePlayers()
     PvPScalpel_PrepareScoreboardRead()
     local totalPlayers = GetNumBattlefieldScores()
@@ -527,6 +553,8 @@ zoneFrame:SetScript("OnEvent", function(self)
         PvPScalpel_Log(tostring(currentMatchKey))
         PvPScalpel_Log(("PvPScalpel: Tracking ON (%s)"):format(formatCheck))
 
+    elseif formatCheck == "Unknown Format" then
+        PvPScalpel_AbortActiveCapture("left_pvp_instance")
     end
 end)
 

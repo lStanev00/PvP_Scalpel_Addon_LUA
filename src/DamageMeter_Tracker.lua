@@ -11,6 +11,8 @@ local damageMeterInCombat = false
 local damageMeterExcludedSessionIds = {}
 local PvPScalpel_DamageMeterStopUpdater
 local damageMeterKickStatsBySource = {}
+local damageMeterStartSessionId = 0
+local damageMeterGlobalHighWaterSessionId = 0
 
 local function PvPScalpel_DamageMeterNormalizeInterruptCount(value)
     if type(value) ~= "number" or value <= 0 then
@@ -86,6 +88,9 @@ local function PvPScalpel_DamageMeterRefreshSessions()
     local sessions = C_DamageMeter.GetAvailableCombatSessions() or {}
     for i = 1, #sessions do
         local session = sessions[i]
+        if session and type(session.sessionID) == "number" and session.sessionID > damageMeterGlobalHighWaterSessionId then
+            damageMeterGlobalHighWaterSessionId = session.sessionID
+        end
         PvPScalpel_DamageMeterCacheSession(session.sessionID, session.name)
     end
     return sessions
@@ -100,7 +105,11 @@ local function PvPScalpel_DamageMeterGetLatestSessionId()
 end
 
 function PvPScalpel_DamageMeterMarkStart()
-    damageMeterStartSessionId = PvPScalpel_DamageMeterGetLatestSessionId() or 0
+    local latestSessionId = PvPScalpel_DamageMeterGetLatestSessionId() or 0
+    if latestSessionId < damageMeterGlobalHighWaterSessionId then
+        latestSessionId = damageMeterGlobalHighWaterSessionId
+    end
+    damageMeterStartSessionId = latestSessionId
     damageMeterExcludedSessionIds = {}
     damageMeterKickStatsBySource = {}
     local sessions = PvPScalpel_DamageMeterRefreshSessions()
@@ -118,6 +127,7 @@ function PvPScalpel_DamageMeterResetMatchBuffer()
     damageMeterRecordedSessions = {}
     damageMeterExcludedSessionIds = {}
     damageMeterKickStatsBySource = {}
+    damageMeterStartSessionId = 0
     damageMeterPending = false
     damageMeterAttempts = 0
     PvPScalpel_DamageMeterStopUpdater()
@@ -158,7 +168,9 @@ local function PvPScalpel_DamageMeterSelectSessions()
     local selected = {}
     for i = 1, #sessions do
         local sessionId = sessions[i].sessionID
-        if sessionId and not damageMeterExcludedSessionIds[sessionId] then
+        if sessionId
+            and not damageMeterExcludedSessionIds[sessionId]
+            and sessionId > damageMeterStartSessionId then
             table.insert(selected, sessionId)
         end
     end
@@ -679,6 +691,8 @@ local function PvPScalpel_DamageMeterOnEvent(_, event, ...)
         damageMeterRecordedSessions = {}
         damageMeterExcludedSessionIds = {}
         damageMeterKickStatsBySource = {}
+        damageMeterStartSessionId = 0
+        damageMeterGlobalHighWaterSessionId = 0
     end
 end
 
