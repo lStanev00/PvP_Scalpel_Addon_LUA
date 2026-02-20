@@ -21,4 +21,6 @@ src/Telemetry_Recorder.lua
 src/Spell_Tracker.lua
 src/DamageMeter_Tracker.lua
 src/Interrupt_Action_Scanner.lua
+src/Match_Helpers.lua
+src/Listener_Manager.lua
 PvP_Scalpel.lua

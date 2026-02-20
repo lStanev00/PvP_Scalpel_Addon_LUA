@@ -1,4 +1,6 @@
 local spellFrame = CreateFrame("Frame")
+local targetFrame = CreateFrame("Frame")
+local spellTrackingEnabled = false
 
 local function IsRealCastGUID(castGUID)
     if not castGUID then return true end
@@ -69,6 +71,10 @@ local function OnSpellEvent(self, event, unit, ...)
 end
 
 function PvPScalpel_EnableSpellTracking()
+    if spellTrackingEnabled then
+        return
+    end
+
     PvPScalpel_Log("Enabling Spell Tracking...")
 
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
@@ -82,20 +88,27 @@ function PvPScalpel_EnableSpellTracking()
     spellFrame:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
 
     spellFrame:SetScript("OnEvent", OnSpellEvent)
+    targetFrame:RegisterUnitEvent("UNIT_TARGET", "player")
+    targetFrame:SetScript("OnEvent", function(_, _, unit)
+        if unit ~= "player" then return end
+        if PvPScalpel_UpdateCurrentTargetSnapshot then
+            PvPScalpel_UpdateCurrentTargetSnapshot()
+        end
+    end)
+
+    spellTrackingEnabled = true
     PvPScalpel_Log("Spell Tracking ENABLED.")
 end
 
 function PvPScalpel_DisableSpellTracking()
+    if not spellTrackingEnabled then
+        return
+    end
+
     PvPScalpel_Log("Disabling Spell Tracking...")
     spellFrame:UnregisterAllEvents()
+    targetFrame:UnregisterAllEvents()
+    targetFrame:SetScript("OnEvent", nil)
+    spellTrackingEnabled = false
     PvPScalpel_Log("Spell Tracking DISABLED.")
 end
-
-local targetFrame = CreateFrame("Frame")
-targetFrame:RegisterUnitEvent("UNIT_TARGET", "player")
-targetFrame:SetScript("OnEvent", function(_, _, unit)
-    if unit ~= "player" then return end
-    if PvPScalpel_UpdateCurrentTargetSnapshot then
-        PvPScalpel_UpdateCurrentTargetSnapshot()
-    end
-end)
