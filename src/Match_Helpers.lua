@@ -216,6 +216,16 @@ function PvPScalpel_HandleSoloShuffleStateChange()
 end
 
 function PvPScalpel_IsLiveMatchStarted()
+    if C_PvP and C_PvP.GetActiveMatchState and Enum and Enum.PvPMatchState and Enum.PvPMatchState.Engaged then
+        local okState, state = pcall(C_PvP.GetActiveMatchState)
+        if okState and type(state) == "number" then
+            if state >= Enum.PvPMatchState.Engaged and state < Enum.PvPMatchState.Complete then
+                return true
+            end
+            return false
+        end
+    end
+
     if C_PvP and C_PvP.HasMatchStarted then
         local ok, started = pcall(C_PvP.HasMatchStarted)
         if ok and started == true then
@@ -267,6 +277,13 @@ function PvPScalpel_AbortActiveCapture(reason)
 
     PvPScalpel_ResetSoloShuffleState()
     PvPScalpel_WaitingForGateOpen = false
+    PvPScalpel_IsTracking = false
+end
+
+function PvPScalpel_FinalizeCaptureBuffer()
+    if PvPScalpel_DamageMeterResetMatchBuffer then
+        PvPScalpel_DamageMeterResetMatchBuffer()
+    end
     PvPScalpel_IsTracking = false
 end
 
@@ -411,14 +428,17 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
     if PvPScalpel_LastSavedMatchTime ~= now then
         if not PvPScalpel_IsTable(match.timeline) then
             PvPScalpel_SoloShuffleNote("timeline_missing")
+            PvPScalpel_FinalizeCaptureBuffer()
             return
         end
         if not PvPScalpel_IsTable(match.castRecords) then
             PvPScalpel_SoloShuffleNote("cast_records_nil")
+            PvPScalpel_FinalizeCaptureBuffer()
             return
         end
         if PvPScalpel_IsDuplicateMatch(match.matchKey, match.matchDetails and match.matchDetails.timestamp) then
             PvPScalpel_SoloShuffleNote("duplicate_match")
+            PvPScalpel_FinalizeCaptureBuffer()
             return
         end
         table.insert(PvP_Scalpel_DB, match)
@@ -431,6 +451,8 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
     else
         PvPScalpel_SoloShuffleNote("duplicate_match_timestamp")
     end
+
+    PvPScalpel_FinalizeCaptureBuffer()
 end
 
 function PvPScalpel_TryCaptureMatch(attempt)
@@ -443,6 +465,8 @@ function PvPScalpel_TryCaptureMatch(attempt)
             C_Timer.After(0.3, function()
                 PvPScalpel_TryCaptureMatch(attempt + 1)
             end)
+        else
+            PvPScalpel_FinalizeCaptureBuffer()
         end
         return
     end
@@ -525,12 +549,15 @@ function PvPScalpel_TryCaptureMatch(attempt)
     if PvPScalpel_LastSavedMatchTime ~= now and #match.players > 0 then
         match = PvPScalpel_StopTimeline(match)
         if not PvPScalpel_IsTable(match.timeline) then
+            PvPScalpel_FinalizeCaptureBuffer()
             return
         end
         if not PvPScalpel_IsTable(match.castRecords) then
+            PvPScalpel_FinalizeCaptureBuffer()
             return
         end
         if PvPScalpel_IsDuplicateMatch(match.matchKey, match.matchDetails and match.matchDetails.timestamp) then
+            PvPScalpel_FinalizeCaptureBuffer()
             return
         end
         table.insert(PvP_Scalpel_DB, match)
@@ -541,5 +568,5 @@ function PvPScalpel_TryCaptureMatch(attempt)
         PvPScalpel_Log("PvP Scalpel: Match saved (" .. #match.players .. " players)")
     end
 
-    PvPScalpel_IsTracking = false
+    PvPScalpel_FinalizeCaptureBuffer()
 end

@@ -284,7 +284,10 @@ function PvPScalpel_MergeInterruptSpellsBySource(sourceMap)
 
             for spellID, count in pairs(spells) do
                 if spellID and PvPScalpel_IsNumber(count) and count > 0 then
-                    sourceEntry[spellID] = (sourceEntry[spellID] or 0) + count
+                    local currentCount = sourceEntry[spellID] or 0
+                    if count > currentCount then
+                        sourceEntry[spellID] = count
+                    end
                 end
             end
         end

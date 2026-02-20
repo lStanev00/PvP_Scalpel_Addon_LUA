@@ -14,6 +14,7 @@ local damageMeterKickStatsBySource = {}
 local damageMeterStartSessionId = 0
 local damageMeterGlobalHighWaterSessionId = 0
 local damageMeterListenersActive = false
+local damageMeterMatchObservedSessions = {}
 
 local function PvPScalpel_DamageMeterNormalizeInterruptCount(value)
     if type(value) ~= "number" or value <= 0 then
@@ -113,6 +114,7 @@ function PvPScalpel_DamageMeterMarkStart()
     damageMeterStartSessionId = latestSessionId
     damageMeterExcludedSessionIds = {}
     damageMeterKickStatsBySource = {}
+    damageMeterMatchObservedSessions = {}
     local sessions = PvPScalpel_DamageMeterRefreshSessions()
     for i = 1, #sessions do
         local sessionId = sessions[i].sessionID
@@ -128,6 +130,7 @@ function PvPScalpel_DamageMeterResetMatchBuffer()
     damageMeterRecordedSessions = {}
     damageMeterExcludedSessionIds = {}
     damageMeterKickStatsBySource = {}
+    damageMeterMatchObservedSessions = {}
     damageMeterStartSessionId = 0
     damageMeterPending = false
     damageMeterAttempts = 0
@@ -167,12 +170,18 @@ local function PvPScalpel_DamageMeterSelectSessions()
     end
 
     local selected = {}
+    local hasObservedSessions = next(damageMeterMatchObservedSessions) ~= nil
+
     for i = 1, #sessions do
         local sessionId = sessions[i].sessionID
-        if sessionId
-            and not damageMeterExcludedSessionIds[sessionId]
-            and sessionId > damageMeterStartSessionId then
-            table.insert(selected, sessionId)
+        if sessionId and not damageMeterExcludedSessionIds[sessionId] then
+            if hasObservedSessions then
+                if damageMeterMatchObservedSessions[sessionId] then
+                    table.insert(selected, sessionId)
+                end
+            elseif damageMeterStartSessionId > 0 and sessionId > damageMeterStartSessionId then
+                table.insert(selected, sessionId)
+            end
         end
     end
 
@@ -351,7 +360,10 @@ local function PvPScalpel_DamageMeterRecordSpellTotals(sessionId, damageMeterTyp
                                 bySource = {}
                                 sinkInterruptsBySource[sourceGuid] = bySource
                             end
-                            bySource[spell.spellID] = (bySource[spell.spellID] or 0) + countAmount
+                            local currentCount = bySource[spell.spellID] or 0
+                            if countAmount > currentCount then
+                                bySource[spell.spellID] = countAmount
+                            end
                         end
                     else
                         if entry then
@@ -421,8 +433,12 @@ local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kin
                         kickEntry = { totalCasts = 0, successfulInterrupts = 0 }
                         damageMeterKickStatsBySource[sourceGUID] = kickEntry
                     end
-                    kickEntry.totalCasts = kickEntry.totalCasts + totalCasts
-                    kickEntry.successfulInterrupts = kickEntry.successfulInterrupts + successfulInterrupts
+                    if totalCasts > kickEntry.totalCasts then
+                        kickEntry.totalCasts = totalCasts
+                    end
+                    if successfulInterrupts > kickEntry.successfulInterrupts then
+                        kickEntry.successfulInterrupts = successfulInterrupts
+                    end
                 end
             end
         end
@@ -675,14 +691,21 @@ local function PvPScalpel_DamageMeterOnEvent(_, event, ...)
         local _, sessionId = ...
         if sessionId then
             PvPScalpel_DamageMeterCacheSession(sessionId, "")
+            if sessionId > damageMeterStartSessionId then
+                damageMeterMatchObservedSessions[sessionId] = true
+            end
         end
     elseif event == "DAMAGE_METER_CURRENT_SESSION_UPDATED" then
-        PvPScalpel_DamageMeterGetLatestSessionId()
+        local latestSessionId = PvPScalpel_DamageMeterGetLatestSessionId()
+        if latestSessionId and latestSessionId > 0 then
+            damageMeterMatchObservedSessions[latestSessionId] = true
+        end
     elseif event == "DAMAGE_METER_RESET" then
         damageMeterSessions = {}
         damageMeterRecordedSessions = {}
         damageMeterExcludedSessionIds = {}
         damageMeterKickStatsBySource = {}
+        damageMeterMatchObservedSessions = {}
         damageMeterStartSessionId = 0
         damageMeterGlobalHighWaterSessionId = 0
     end
