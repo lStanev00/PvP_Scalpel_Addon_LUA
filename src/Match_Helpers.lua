@@ -364,7 +364,7 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
 
     local match = {
         matchKey = currentMatchKey,
-        telemetryVersion = 3,
+        telemetryVersion = 3.1,
         winner = lastMatchWinner,
         matchDetails = {
             timestamp = now,
@@ -475,7 +475,7 @@ function PvPScalpel_TryCaptureMatch(attempt)
     local now = date("%Y-%m-%d %H:%M:%S")
     local match = {
         matchKey = currentMatchKey,
-        telemetryVersion = 3,
+        telemetryVersion = 3.1,
         winner = lastMatchWinner,
         matchDetails = {
             timestamp = now,
