@@ -268,6 +268,48 @@ function PvPScalpel_MergeSpellTotalsBySource(sourceMap)
     end
 end
 
+function PvPScalpel_ReplaceSpellTotalsBySource(sourceMap)
+    local replaced = {}
+    if not PvPScalpel_IsTable(sourceMap) then
+        currentSpellTotalsBySource = replaced
+        return
+    end
+
+    for sourceGUID, spells in pairs(sourceMap) do
+        if type(sourceGUID) == "string" and sourceGUID ~= "" and PvPScalpel_IsTable(spells) then
+            local sourceEntry = {}
+            for spellID, incoming in pairs(spells) do
+                if spellID and PvPScalpel_IsTable(incoming) then
+                    local entry = {
+                        damage = incoming.damage or 0,
+                        healing = incoming.healing or 0,
+                        overheal = incoming.overheal or 0,
+                        absorbed = incoming.absorbed or 0,
+                        hits = incoming.hits or 0,
+                        crits = incoming.crits or 0,
+                        targets = {},
+                        interrupts = incoming.interrupts or 0,
+                        dispels = incoming.dispels or 0,
+                    }
+                    if PvPScalpel_IsTable(incoming.targets) then
+                        for targetName, amount in pairs(incoming.targets) do
+                            if type(targetName) == "string" and targetName ~= "" and PvPScalpel_IsNumber(amount) and amount > 0 then
+                                entry.targets[targetName] = amount
+                            end
+                        end
+                    end
+                    sourceEntry[spellID] = entry
+                end
+            end
+            if next(sourceEntry) ~= nil then
+                replaced[sourceGUID] = sourceEntry
+            end
+        end
+    end
+
+    currentSpellTotalsBySource = replaced
+end
+
 function PvPScalpel_MergeInterruptSpellsBySource(sourceMap)
     if not PvPScalpel_IsTable(sourceMap) then return end
     if not currentInterruptSpellsBySource then
@@ -292,6 +334,30 @@ function PvPScalpel_MergeInterruptSpellsBySource(sourceMap)
             end
         end
     end
+end
+
+function PvPScalpel_ReplaceInterruptSpellsBySource(sourceMap)
+    local replaced = {}
+    if not PvPScalpel_IsTable(sourceMap) then
+        currentInterruptSpellsBySource = replaced
+        return
+    end
+
+    for sourceGUID, spells in pairs(sourceMap) do
+        if type(sourceGUID) == "string" and sourceGUID ~= "" and PvPScalpel_IsTable(spells) then
+            local sourceEntry = {}
+            for spellID, count in pairs(spells) do
+                if spellID and PvPScalpel_IsNumber(count) and count > 0 then
+                    sourceEntry[spellID] = count
+                end
+            end
+            if next(sourceEntry) ~= nil then
+                replaced[sourceGUID] = sourceEntry
+            end
+        end
+    end
+
+    currentInterruptSpellsBySource = replaced
 end
 
 function PvPScalpel_RecordCastOutcome(outcome)

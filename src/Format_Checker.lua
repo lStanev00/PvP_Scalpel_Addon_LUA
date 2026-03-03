@@ -1,38 +1,66 @@
-function PvPScalpel_FormatChecker()
-    local ratedChecker = C_PvP.DoesMatchOutcomeAffectRating()
-
-    if ratedChecker then
-        local ratedArenaChecker = C_PvP.IsRatedArena()
-        if ratedArenaChecker then
-            return "Rated Arena"
-        end
-
-        local shuffleChecker = C_PvP.IsSoloShuffle()
-        if shuffleChecker then
-            return "Solo Shuffle"
-        end
-
-        local blitzChecker = C_PvP.IsSoloRBG()
-        if blitzChecker then
-            return "Battleground Blitz"
-        end
-
-        local rbgChecker = C_PvP.IsRatedSoloRBG()
-        if rbgChecker then
-            return "Rated Battleground"
-        end
+local function PvPScalpel_SafePvpFlag(methodName)
+    if not C_PvP then
+        return false
     end
-
-    local arenaChecker = C_PvP.IsArena()
-    if arenaChecker then
-        return "Arena Skirmish"
+    local fn = C_PvP[methodName]
+    if type(fn) ~= "function" then
+        return false
     end
-
-    local battlegroundChecker = C_PvP.IsBattleground()
-    if battlegroundChecker then
-        return "Random Battleground"
-    end
-
-    return "Unknown Format"
+    local ok, value = pcall(fn)
+    return ok and value == true
 end
 
+function PvPScalpel_GetMatchCaptureCategory()
+    local isSoloShuffle = PvPScalpel_SafePvpFlag("IsSoloShuffle")
+        or PvPScalpel_SafePvpFlag("IsRatedSoloShuffle")
+        or PvPScalpel_SafePvpFlag("IsBrawlSoloShuffle")
+    if isSoloShuffle then
+        return "solo_shuffle"
+    end
+
+    local isBattleground = PvPScalpel_SafePvpFlag("IsBattleground")
+        or PvPScalpel_SafePvpFlag("IsRatedBattleground")
+        or PvPScalpel_SafePvpFlag("IsSoloRBG")
+        or PvPScalpel_SafePvpFlag("IsRatedSoloRBG")
+        or PvPScalpel_SafePvpFlag("IsBrawlSoloRBG")
+    if isBattleground then
+        return "battleground"
+    end
+
+    local isArena = PvPScalpel_SafePvpFlag("IsArena")
+        or PvPScalpel_SafePvpFlag("IsRatedArena")
+        or PvPScalpel_SafePvpFlag("IsMatchConsideredArena")
+    if isArena then
+        return "arena"
+    end
+
+    return "unknown"
+end
+
+function PvPScalpel_DamageMeterUseSessionAggregation()
+    local category = PvPScalpel_GetMatchCaptureCategory()
+    return category == "battleground" or category == "solo_shuffle"
+end
+
+function PvPScalpel_FormatChecker()
+    local category = PvPScalpel_GetMatchCaptureCategory()
+    if category == "solo_shuffle" then
+        return "Solo Shuffle"
+    end
+    if category == "arena" then
+        if PvPScalpel_SafePvpFlag("IsRatedArena") then
+            return "Rated Arena"
+        end
+        return "Arena Skirmish"
+    end
+    if category == "battleground" then
+        if PvPScalpel_SafePvpFlag("IsSoloRBG") then
+            return "Battleground Blitz"
+        end
+        if PvPScalpel_SafePvpFlag("IsRatedSoloRBG") or PvPScalpel_SafePvpFlag("IsRatedBattleground") then
+            return "Rated Battleground"
+        end
+        return "Random Battleground"
+    end
+    return "Unknown Format"
+end
