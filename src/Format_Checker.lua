@@ -10,6 +10,10 @@ local function PvPScalpel_SafePvpFlag(methodName)
     return ok and value == true
 end
 
+local function PvPScalpel_IsRatedOutcomeMatch()
+    return PvPScalpel_SafePvpFlag("DoesMatchOutcomeAffectRating")
+end
+
 function PvPScalpel_GetMatchCaptureCategory()
     local isSoloShuffle = PvPScalpel_SafePvpFlag("IsSoloShuffle")
         or PvPScalpel_SafePvpFlag("IsRatedSoloShuffle")
@@ -48,7 +52,7 @@ function PvPScalpel_FormatChecker()
         return "Solo Shuffle"
     end
     if category == "arena" then
-        if PvPScalpel_SafePvpFlag("IsRatedArena") then
+        if PvPScalpel_SafePvpFlag("IsRatedArena") and PvPScalpel_IsRatedOutcomeMatch() then
             return "Rated Arena"
         end
         return "Arena Skirmish"
@@ -57,7 +61,8 @@ function PvPScalpel_FormatChecker()
         if PvPScalpel_SafePvpFlag("IsSoloRBG") then
             return "Battleground Blitz"
         end
-        if PvPScalpel_SafePvpFlag("IsRatedSoloRBG") or PvPScalpel_SafePvpFlag("IsRatedBattleground") then
+        if (PvPScalpel_SafePvpFlag("IsRatedSoloRBG") or PvPScalpel_SafePvpFlag("IsRatedBattleground"))
+            and PvPScalpel_IsRatedOutcomeMatch() then
             return "Rated Battleground"
         end
         return "Random Battleground"
