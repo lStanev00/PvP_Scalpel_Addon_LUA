@@ -76,6 +76,7 @@ function PvPScalpel_StopTimeline(match)
     currentSpellTotalsBySource = nil
     currentInterruptSpellsBySource = nil
     currentCastOutcomes = nil
+    currentBgGameType = nil
 
     return match
 end
