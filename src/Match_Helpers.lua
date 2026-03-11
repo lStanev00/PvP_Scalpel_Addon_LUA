@@ -19,6 +19,54 @@ function PvPScalpel_IsRatedSoloShuffle()
     return C_PvP and C_PvP.IsRatedSoloShuffle and C_PvP.IsRatedSoloShuffle()
 end
 
+local function PvPScalpel_ResetMatchStartMetadata()
+    currentBgGameType = nil
+end
+
+local function PvPScalpel_CaptureMatchStartMetadata()
+    PvPScalpel_ResetMatchStartMetadata()
+
+    if not C_Map or type(C_Map.GetBestMapForUnit) ~= "function" then
+        return
+    end
+    if not C_PvP or type(C_PvP.GetBattlegroundInfo) ~= "function" then
+        return
+    end
+    if type(GetNumBattlegroundTypes) ~= "function" then
+        return
+    end
+
+    local okMap, uiMapID = pcall(C_Map.GetBestMapForUnit, "player")
+    if not okMap or type(uiMapID) ~= "number" then
+        return
+    end
+
+    local okCount, battlegroundCount = pcall(GetNumBattlegroundTypes)
+    if not okCount or type(battlegroundCount) ~= "number" or battlegroundCount < 1 then
+        return
+    end
+
+    for index = 1, battlegroundCount do
+        local okInfo, battlegroundInfo = pcall(C_PvP.GetBattlegroundInfo, index)
+        if okInfo and type(battlegroundInfo) == "table" and battlegroundInfo.mapID == uiMapID then
+            local gameType = battlegroundInfo.gameType
+            if type(gameType) == "string" and gameType ~= "" then
+                currentBgGameType = gameType
+            end
+            return
+        end
+    end
+end
+
+local function PvPScalpel_ApplyMatchStartMetadata(matchDetails)
+    if type(matchDetails) ~= "table" then
+        return
+    end
+    if type(currentBgGameType) == "string" and currentBgGameType ~= "" then
+        matchDetails.bgGameType = currentBgGameType
+    end
+end
+
 function PvPScalpel_SoloShuffleNote(msg)
     if not soloShuffleState.notes then
         soloShuffleState.notes = {}
@@ -245,6 +293,7 @@ function PvPScalpel_BeginMatchCapture(trigger)
         PvPScalpel_RegisterRuntimeListeners()
     end
     PvPScalpel_StartTimeline()
+    PvPScalpel_CaptureMatchStartMetadata()
     if PvPScalpel_DamageMeterResetMatchBuffer then
         PvPScalpel_DamageMeterResetMatchBuffer()
     end
@@ -275,6 +324,7 @@ function PvPScalpel_AbortActiveCapture(reason)
         PvPScalpel_StopTimeline(nil)
     end
 
+    PvPScalpel_ResetMatchStartMetadata()
     PvPScalpel_ResetSoloShuffleState()
     PvPScalpel_WaitingForGateOpen = false
     PvPScalpel_IsTracking = false
@@ -284,6 +334,7 @@ function PvPScalpel_FinalizeCaptureBuffer()
     if PvPScalpel_DamageMeterResetMatchBuffer then
         PvPScalpel_DamageMeterResetMatchBuffer()
     end
+    PvPScalpel_ResetMatchStartMetadata()
     PvPScalpel_IsTracking = false
 end
 
@@ -368,12 +419,13 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         winner = lastMatchWinner,
         matchDetails = {
             timestamp = now,
-            format = PvPScalpel_FormatChecker(),
             mapName = mapName,
             build = PvPScalpel_GetBuildInfoSnapshot(),
         },
         players = PvPScalpel_BuildSoloShufflePlayers(),
     }
+    PvPScalpel_ApplyMatchStartMetadata(match.matchDetails)
+    match.matchDetails.format = PvPScalpel_FormatChecker(match.players)
 
     match = PvPScalpel_StopTimeline(match)
 
@@ -479,12 +531,12 @@ function PvPScalpel_TryCaptureMatch(attempt)
         winner = lastMatchWinner,
         matchDetails = {
             timestamp = now,
-            format = PvPScalpel_FormatChecker(),
             mapName = mapName,
             build = PvPScalpel_GetBuildInfoSnapshot(),
         },
         players = {}
     }
+    PvPScalpel_ApplyMatchStartMetadata(match.matchDetails)
 
     local ownerName = PvPScalpel_CurrentPlayerName or UnitFullName("player")
 
@@ -525,6 +577,7 @@ function PvPScalpel_TryCaptureMatch(attempt)
             table.insert(match.players, entry)
         end
     end
+    match.matchDetails.format = PvPScalpel_FormatChecker(match.players)
 
     local isFactional = C_PvP and C_PvP.IsMatchFactional and C_PvP.IsMatchFactional() or false
     if isFactional then
