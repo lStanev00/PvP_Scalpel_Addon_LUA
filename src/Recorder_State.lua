@@ -12,6 +12,7 @@ currentSpellTotals = nil
 currentSpellTotalsBySource = nil
 currentInterruptSpellsBySource = nil
 currentCastOutcomes = nil
+currentBgGameType = nil
 trinketSlots = { 13, 14 }
 lastTrinketCooldowns = {}
 damageMeterStartSessionId = nil
