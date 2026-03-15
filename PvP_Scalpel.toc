@@ -10,6 +10,7 @@
 src/Scan_Cooldowns.lua
 src/Slugify.lua
 src/Utils.lua
+src/UnitPopup_Menu.lua
 src/User_Commands.lua
 src/Garbage_Collector.lua
 src/Format_Checker.lua
