@@ -3,7 +3,7 @@
 -- Command documentation:
 -- /pvps-help             -> lists all available commands and their activity.
 -- /pvps-reset             -> clears PvP_Scalpel_DB, PvP_Scalpel_GC, PvP_Scalpel_InteruptSpells and reloads UI.
--- /pvps-debug             -> toggles debug chat logging on/off.
+-- /pvps-debug             -> toggles the dedicated debug chat tab on/off.
 -- /pvps-count, /pvps-len   -> prints number of recorded matches in PvP_Scalpel_DB.
 
 local function PvPScalpel_CommandPrint(message)
@@ -26,12 +26,16 @@ local function PvPScalpel_HandleReset()
 end
 
 local function PvPScalpel_HandleDebugToggle()
-    if PvPScalpel_Debug == nil then
-        PvPScalpel_Debug = true
-    else
-        PvPScalpel_Debug = not PvPScalpel_Debug
+    local nextValue = true
+    if PvPScalpel_Debug == true then
+        nextValue = false
     end
-    PvPScalpel_CommandPrint("Debug logging: " .. tostring(PvPScalpel_Debug))
+    if PvPScalpel_DebugSetEnabled then
+        PvPScalpel_DebugSetEnabled(nextValue)
+    else
+        PvPScalpel_Debug = nextValue
+    end
+    PvPScalpel_CommandPrint("Debug tab: " .. tostring(PvPScalpel_Debug))
 end
 
 local function PvPScalpel_HandleCount()
@@ -40,28 +44,6 @@ local function PvPScalpel_HandleCount()
         count = #PvP_Scalpel_DB
     end
     PvPScalpel_CommandPrint("Recorded matches: " .. tostring(count))
-end
-
-local function PvPScalpel_GetSpellNameByID(spellID)
-    if type(spellID) ~= "number" then
-        return nil
-    end
-
-    if C_Spell and C_Spell.GetSpellName then
-        local ok, spellName = pcall(C_Spell.GetSpellName, spellID)
-        if ok and type(spellName) == "string" and spellName ~= "" then
-            return spellName
-        end
-    end
-
-    if GetSpellInfo then
-        local ok, spellName = pcall(GetSpellInfo, spellID)
-        if ok and type(spellName) == "string" and spellName ~= "" then
-            return spellName
-        end
-    end
-
-    return nil
 end
 
 local function PvPScalpel_HandleKickDump()
@@ -97,7 +79,7 @@ end
 local commandDocs = {
     { command = "/pvps-help", activity = "List all slash commands and what each command does." },
     { command = "/pvps-reset", activity = "Wipe addon SavedVariables and reload the UI." },
-    { command = "/pvps-debug", activity = "Toggle debug log output in chat." },
+    { command = "/pvps-debug", activity = "Toggle the PvP Scalpel Debug chat tab." },
     { command = "/pvps-count", activity = "Print number of recorded matches." },
     { command = "/pvps-len", activity = "Alias of /pvpscount." },
     { command = "/pvps-kickdump", activity = "Dump known kick spell IDs and resolved spell names." },

@@ -8,6 +8,28 @@ function PvPScalpel_IsNumber(value)
     return type(value) == "number"
 end
 
+function PvPScalpel_GetSpellNameByID(spellID)
+    if type(spellID) ~= "number" then
+        return nil
+    end
+
+    if C_Spell and C_Spell.GetSpellName then
+        local ok, spellName = pcall(C_Spell.GetSpellName, spellID)
+        if ok and type(spellName) == "string" and spellName ~= "" then
+            return spellName
+        end
+    end
+
+    if GetSpellInfo then
+        local ok, spellName = pcall(GetSpellInfo, spellID)
+        if ok and type(spellName) == "string" and spellName ~= "" then
+            return spellName
+        end
+    end
+
+    return nil
+end
+
 function PvPScalpel_Split(input, delimiter)
     local result = {}
     for match in (tostring(input) .. delimiter):gmatch("(.-)" .. delimiter) do
@@ -52,7 +74,9 @@ local function PvPScalpel_FlushLogQueue()
     local prefix = "|cff00ff98[PvP Scalpel]|r "
     for i = 1, #PvPScalpel_LogQueue do
         local message = PvPScalpel_LogQueue[i]
-        if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+        if PvPScalpel_DebugWriteMessage and PvPScalpel_DebugWriteMessage(prefix .. message) then
+            -- Routed into the dedicated debug chat frame.
+        elseif DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
             DEFAULT_CHAT_FRAME:AddMessage(prefix .. message)
         else
             print(prefix .. message)
@@ -82,6 +106,10 @@ function PvPScalpel_Log(msg)
     end
 
     local prefix = "|cff00ff98[PvP Scalpel]|r "
+    if PvPScalpel_DebugWriteMessage and PvPScalpel_DebugWriteMessage(prefix .. message) then
+        return
+    end
+
     if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
         DEFAULT_CHAT_FRAME:AddMessage(prefix .. message)
     else

@@ -4,12 +4,14 @@
 ## Notes: Tracks PvP match results
 ## Author: Lachezar Stanev
 ## SavedVariables: PvP_Scalpel_DB, PvP_Scalpel_GC, PvP_Scalpel_InteruptSpells
+## SavedVariablesPerCharacter: PvP_Scalpel_DebugHistory
 ## LoadOnDemand: 0
 ## DefaultState: Enabled
 
 src/Scan_Cooldowns.lua
 src/Slugify.lua
 src/Utils.lua
+src/Spell_Cast_Debug.lua
 src/UnitPopup_Menu.lua
 src/User_Commands.lua
 src/Garbage_Collector.lua
