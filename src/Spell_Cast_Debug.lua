@@ -32,6 +32,8 @@ local RegisterDebugSpellEvents
 local kickSpellLookup = {}
 local kickSpellLookupCount = -1
 local kickSpellLookupSource = nil
+local spellFilterClassificationCache = {}
+local spellFilterCacheBuildKey = nil
 local heuristicLocWatcherFrames = {}
 local targetSnapshotCache = nil
 local spellTrackingRegistered = false
@@ -95,6 +97,46 @@ local function GetDebugEpoch()
         end
     end
     return nil
+end
+
+local function GetSpellFilterBuildKey()
+    local snapshot = PvPScalpel_GetBuildInfoSnapshot and PvPScalpel_GetBuildInfoSnapshot() or nil
+    if type(snapshot) == "table" then
+        if type(snapshot.versionString) == "string" and snapshot.versionString ~= "" then
+            return snapshot.versionString
+        end
+        if snapshot.version ~= nil and snapshot.build ~= nil then
+            return tostring(snapshot.version) .. "." .. tostring(snapshot.build)
+        end
+        if snapshot.interface ~= nil then
+            return tostring(snapshot.interface)
+        end
+    end
+    return "unknown"
+end
+
+local function EnsureSpellFilterCacheStore()
+    local buildKey = GetSpellFilterBuildKey()
+
+    if spellFilterCacheBuildKey ~= buildKey or type(spellFilterClassificationCache) ~= "table" then
+        spellFilterClassificationCache = {}
+        spellFilterCacheBuildKey = buildKey
+    end
+
+    if type(PvP_Scalpel_SpellFilterCache) ~= "table" then
+        PvP_Scalpel_SpellFilterCache = {}
+    end
+
+    local cache = PvP_Scalpel_SpellFilterCache
+    if cache.schemaVersion ~= 1
+        or cache.buildKey ~= buildKey
+        or type(cache.bySpellID) ~= "table" then
+        cache.schemaVersion = 1
+        cache.buildKey = buildKey
+        cache.bySpellID = {}
+    end
+
+    return cache
 end
 
 local function ScrubOptionalString(value)
@@ -2012,6 +2054,82 @@ local function HasHighConfidenceCombatSignal(combatSignals)
         or combatSignals.isExternalDefensive == true
 end
 
+local function GetStableSpellFilterClassification(spellID)
+    if type(spellID) ~= "number" then
+        return nil
+    end
+
+    local cached = spellFilterClassificationCache[spellID]
+    if type(cached) == "table" then
+        return cached
+    end
+
+    local cache = EnsureSpellFilterCacheStore()
+    local persisted = cache.bySpellID[spellID]
+    if type(persisted) == "table" then
+        spellFilterClassificationCache[spellID] = persisted
+        return persisted
+    end
+
+    local classification = {
+        classificationKind = "runtime_needed",
+        wasKeptByKickBypass = false,
+        filterReason = nil,
+        note = nil,
+        spellbookContext = nil,
+        combatSignals = nil,
+        isCombatPositive = false,
+        hasHighConfidenceCombatSignal = false,
+    }
+
+    if IsKickBypassSpellID(spellID) then
+        classification.classificationKind = "hard_keep"
+        classification.wasKeptByKickBypass = true
+    elseif SafeMountID(spellID) ~= nil then
+        classification.classificationKind = "hard_drop"
+        classification.filterReason = "mount_spell"
+        classification.note = "Filtered mount summon spell."
+    elseif SafeTradeSkillLink(spellID) ~= nil then
+        classification.classificationKind = "hard_drop"
+        classification.filterReason = "trade_skill_spell"
+        classification.note = "Filtered profession or trade-skill spell."
+    elseif C_Spell and SafeBooleanCall(C_Spell.IsConsumableSpell, spellID) == true then
+        classification.classificationKind = "hard_drop"
+        classification.filterReason = "consumable_spell"
+        classification.note = "Filtered consumable spell."
+    elseif C_Spell and SafeBooleanCall(C_Spell.IsSpellPassive, spellID) == true then
+        classification.classificationKind = "hard_drop"
+        classification.filterReason = "passive_spell"
+        classification.note = "Filtered passive spell."
+    elseif C_Spell and SafeBooleanCall(C_Spell.IsAutoAttackSpell, spellID) == true then
+        classification.classificationKind = "hard_drop"
+        classification.filterReason = "auto_attack_spell"
+        classification.note = "Filtered auto-attack spell."
+    elseif C_Spell and SafeBooleanCall(C_Spell.IsAutoRepeatSpell, spellID) == true then
+        classification.classificationKind = "hard_drop"
+        classification.filterReason = "auto_repeat_spell"
+        classification.note = "Filtered auto-repeat spell."
+    else
+        local spellBookContext = GetSpellBookContext(spellID)
+        local combatSignals = GetCombatSignals(spellID)
+
+        classification.spellbookContext = spellBookContext
+        classification.combatSignals = combatSignals
+        classification.isCombatPositive = HasCombatPositiveSignal(spellBookContext, combatSignals) == true
+        classification.hasHighConfidenceCombatSignal = HasHighConfidenceCombatSignal(combatSignals) == true
+
+        if spellBookContext.isPassive == true then
+            classification.classificationKind = "hard_drop"
+            classification.filterReason = "spellbook_passive"
+            classification.note = "Filtered passive spellbook entry."
+        end
+    end
+
+    cache.bySpellID[spellID] = classification
+    spellFilterClassificationCache[spellID] = classification
+    return classification
+end
+
 local function IsMountActionRuntimeState(runtimeState)
     if type(runtimeState) ~= "table" then
         return false
@@ -2061,60 +2179,30 @@ local function EvaluateCombatSpellFilter(castEntry)
     end
 
     local spellID = castEntry.spellID
+    local stableClassification = GetStableSpellFilterClassification(spellID)
+    if type(stableClassification) ~= "table" then
+        return decision
+    end
 
-    if IsKickBypassSpellID(spellID) then
+    castEntry.spellbookContext = stableClassification.spellbookContext
+    castEntry.combatSignals = stableClassification.combatSignals
+
+    if stableClassification.classificationKind == "hard_keep" then
         decision.keep = true
-        decision.wasKeptByKickBypass = true
+        decision.wasKeptByKickBypass = stableClassification.wasKeptByKickBypass == true
         return decision
     end
 
-    if SafeMountID(spellID) ~= nil then
-        decision.filterReason = "mount_spell"
-        decision.note = "Filtered mount summon spell."
+    if stableClassification.classificationKind == "hard_drop" then
+        decision.filterReason = stableClassification.filterReason
+        decision.note = stableClassification.note
         return decision
     end
 
-    if SafeTradeSkillLink(spellID) ~= nil then
-        decision.filterReason = "trade_skill_spell"
-        decision.note = "Filtered profession or trade-skill spell."
-        return decision
-    end
-
-    if C_Spell then
-        if SafeBooleanCall(C_Spell.IsConsumableSpell, spellID) == true then
-            decision.filterReason = "consumable_spell"
-            decision.note = "Filtered consumable spell."
-            return decision
-        end
-        if SafeBooleanCall(C_Spell.IsSpellPassive, spellID) == true then
-            decision.filterReason = "passive_spell"
-            decision.note = "Filtered passive spell."
-            return decision
-        end
-        if SafeBooleanCall(C_Spell.IsAutoAttackSpell, spellID) == true then
-            decision.filterReason = "auto_attack_spell"
-            decision.note = "Filtered auto-attack spell."
-            return decision
-        end
-        if SafeBooleanCall(C_Spell.IsAutoRepeatSpell, spellID) == true then
-            decision.filterReason = "auto_repeat_spell"
-            decision.note = "Filtered auto-repeat spell."
-            return decision
-        end
-    end
-
-    local spellBookContext = GetSpellBookContext(spellID)
-    castEntry.spellbookContext = spellBookContext
-    if spellBookContext.isPassive == true then
-        decision.filterReason = "spellbook_passive"
-        decision.note = "Filtered passive spellbook entry."
-        return decision
-    end
-
-    local combatSignals = GetCombatSignals(spellID)
-    castEntry.combatSignals = combatSignals
-    local isCombatPositive = HasCombatPositiveSignal(spellBookContext, combatSignals)
-    local hasHighConfidenceCombatSignal = HasHighConfidenceCombatSignal(combatSignals)
+    local spellBookContext = castEntry.spellbookContext or {}
+    local combatSignals = castEntry.combatSignals or {}
+    local isCombatPositive = stableClassification.isCombatPositive == true
+    local hasHighConfidenceCombatSignal = stableClassification.hasHighConfidenceCombatSignal == true
 
     if LacksStartLikeLifecycle(castEntry) and IsMountActionRuntimeState(castEntry.runtimeState) then
         decision.filterReason = "mount_action_runtime"
