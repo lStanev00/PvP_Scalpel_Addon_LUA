@@ -125,7 +125,6 @@ function PvPScalpel_RegisterRuntimeListeners()
     if PvPScalpel_DamageMeterEnableListeners then
         PvPScalpel_DamageMeterEnableListeners()
     end
-    RegisterTrinketListener()
 
     runtimeListenersRegistered = true
 end
@@ -135,7 +134,6 @@ function PvPScalpel_UnregisterRuntimeListeners()
         return
     end
 
-    UnregisterTrinketListener()
     if PvPScalpel_DisableSpellTracking then
         PvPScalpel_DisableSpellTracking()
     end

@@ -105,8 +105,6 @@ function PvPScalpel_StartSoloShuffleRound()
     local round = {
         roundIndex = soloShuffleState.currentRoundIndex,
         stateStartTime = now,
-        timeline = {},
-        castRecords = {},
     }
     soloShuffleState.currentRound = round
     soloShuffleState.currentRoundStart = now
@@ -284,7 +282,7 @@ function PvPScalpel_IsLiveMatchStarted()
 end
 
 function PvPScalpel_BeginMatchCapture(trigger)
-    if PvPScalpel_IsTable(currentTimeline) and PvPScalpel_IsNumber(timelineStart) then
+    if PvPScalpel_IsLocalSpellCaptureActive and PvPScalpel_IsLocalSpellCaptureActive() then
         return
     end
 
@@ -300,13 +298,12 @@ function PvPScalpel_BeginMatchCapture(trigger)
     if PvPScalpel_DamageMeterMarkStart then
         PvPScalpel_DamageMeterMarkStart()
     end
-    PvPScalpel_Log("Timeline STARTED after gates opened.")
+    PvPScalpel_Log("Local spell capture STARTED after gates opened.")
 end
 
 function PvPScalpel_AbortActiveCapture(reason)
-    local hasTimeline = (type(currentTimeline) == "table")
-    local hasTimelineStart = (type(timelineStart) == "number")
-    if not hasTimeline and not hasTimelineStart and not PvPScalpel_IsTracking then
+    local captureActive = PvPScalpel_IsLocalSpellCaptureActive and PvPScalpel_IsLocalSpellCaptureActive()
+    if not captureActive and not PvPScalpel_IsTracking then
         return
     end
 
@@ -415,7 +412,7 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
 
     local match = {
         matchKey = currentMatchKey,
-        telemetryVersion = 3.1,
+        telemetryVersion = 4.0,
         winner = lastMatchWinner,
         matchDetails = {
             timestamp = now,
@@ -460,7 +457,6 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         duration = C_PvP.GetActiveMatchDuration and C_PvP.GetActiveMatchDuration() or 0,
         roundsExpected = 6,
         roundsCaptured = roundsCaptured,
-        timeline = match.timeline,
         rounds = soloShuffleState.rounds,
         matchSummary = {
             statColumns = matchSummarySnapshot and matchSummarySnapshot.statColumns or {},
@@ -471,20 +467,20 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         },
         integrity = {
             scoreboardComplete = scoreboardReady and totalPlayers > 0,
-            timelineComplete = match.timeline ~= nil,
+            timelineComplete = PvPScalpel_IsTable(match.localSpellCapture) and PvPScalpel_IsTable(match.localLossOfControl),
             roundsComplete = roundsCaptured == 6,
             notes = integrityNotes,
         }
     }
 
     if PvPScalpel_LastSavedMatchTime ~= now then
-        if not PvPScalpel_IsTable(match.timeline) then
-            PvPScalpel_SoloShuffleNote("timeline_missing")
+        if not PvPScalpel_IsTable(match.localSpellCapture) then
+            PvPScalpel_SoloShuffleNote("local_spell_capture_missing")
             PvPScalpel_FinalizeCaptureBuffer()
             return
         end
-        if not PvPScalpel_IsTable(match.castRecords) then
-            PvPScalpel_SoloShuffleNote("cast_records_nil")
+        if not PvPScalpel_IsTable(match.localLossOfControl) then
+            PvPScalpel_SoloShuffleNote("local_loss_of_control_missing")
             PvPScalpel_FinalizeCaptureBuffer()
             return
         end
@@ -527,7 +523,7 @@ function PvPScalpel_TryCaptureMatch(attempt)
     local now = date("%Y-%m-%d %H:%M:%S")
     local match = {
         matchKey = currentMatchKey,
-        telemetryVersion = 3.1,
+        telemetryVersion = 4.0,
         winner = lastMatchWinner,
         matchDetails = {
             timestamp = now,
@@ -601,11 +597,11 @@ function PvPScalpel_TryCaptureMatch(attempt)
 
     if PvPScalpel_LastSavedMatchTime ~= now and #match.players > 0 then
         match = PvPScalpel_StopTimeline(match)
-        if not PvPScalpel_IsTable(match.timeline) then
+        if not PvPScalpel_IsTable(match.localSpellCapture) then
             PvPScalpel_FinalizeCaptureBuffer()
             return
         end
-        if not PvPScalpel_IsTable(match.castRecords) then
+        if not PvPScalpel_IsTable(match.localLossOfControl) then
             PvPScalpel_FinalizeCaptureBuffer()
             return
         end

@@ -46,7 +46,9 @@ local function PvPScalpel_DamageMeterShouldCollect()
     -- Only collect while the recorder is actively tracking a PvP match.
     -- This avoids doing any DamageMeter work (and avoids touching secret values)
     -- in open world / non-PvP contexts.
-    return type(currentMatchKey) == "string" and type(currentTimeline) == "table" and type(timelineStart) == "number"
+    return type(currentMatchKey) == "string"
+        and PvPScalpel_IsLocalSpellCaptureActive
+        and PvPScalpel_IsLocalSpellCaptureActive()
 end
 
 local function PvPScalpel_DamageMeterLog(message)

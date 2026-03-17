@@ -105,10 +105,7 @@ function PvPScalpel_HandlePvpMatchStateChanged()
 end
 
 function PvPScalpel_HandleTrinketCooldownEvent(event)
-    if not currentTimeline or not timelineStart then
-        return
-    end
-    PvPScalpel_CheckTrinketCooldowns(event)
+    return
 end
 
 if PvPScalpel_RegisterStaticListeners then

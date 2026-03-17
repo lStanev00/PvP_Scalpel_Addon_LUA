@@ -1,13 +1,20 @@
+-- NOTE [2026-03-16]:
+-- The live visible-unit CC attribution heuristic is currently disabled.
+-- Current state: it does not log reliably enough yet, so the code is kept
+-- in place for later rework but is not enabled at runtime.
+
 local debugInitFrame = CreateFrame("Frame")
 local debugSpellFrame = CreateFrame("Frame")
+local heuristicUnitFrame = CreateFrame("Frame")
 
 local DEBUG_WINDOW_NAME = "PvP Scalpel Debug"
-local DEBUG_HISTORY_LIMIT = 150
-local FILTERED_HISTORY_LIMIT = 150
-local LOC_HISTORY_LIMIT = 150
+local LIVE_VISIBLE_UNIT_CC_ATTRIBUTION_ENABLED = false
 local RESOLVED_CAST_TTL_SECONDS = 120
 local LOC_CAST_CORRELATION_WINDOW_SECONDS = 1.0
 local STOP_FINALIZE_GRACE_SECONDS = 0.20
+local HEURISTIC_CC_CORRELATION_WINDOW_SECONDS = 1.0
+local HEURISTIC_EVENT_TTL_SECONDS = 120
+local MAX_ARENA_UNIT_TOKENS = 5
 
 local debugCastByGuid = {}
 local resolvedCastByGuid = {}
@@ -17,10 +24,19 @@ local activeLocByKey = {}
 local activeCastGuid = nil
 local RemoveCastEntry
 local AppendLocToChat
+local SafeGetSchoolString
+local IsSpellCaptureSessionActive
+local PruneResolvedHeuristicEvents
+local RegisterDebugSpellEvents
 
 local kickSpellLookup = {}
 local kickSpellLookupCount = -1
 local kickSpellLookupSource = nil
+local heuristicLocWatcherFrames = {}
+local targetSnapshotCache = nil
+local spellTrackingRegistered = false
+local activeSpellCaptureSession = nil
+local heuristicRuntimeState = nil
 local runtimeStateCache = {
     isMounted = nil,
     isFlying = nil,
@@ -100,131 +116,512 @@ local function ScrubOptionalString(value)
     return nil
 end
 
-local function EnsureDebugHistoryStore()
-    if type(PvP_Scalpel_DebugHistory) ~= "table" then
-        PvP_Scalpel_DebugHistory = {}
-    end
-    if type(PvP_Scalpel_DebugHistory.lines) ~= "table" then
-        PvP_Scalpel_DebugHistory.lines = {}
-    end
-    if type(PvP_Scalpel_DebugHistory.filteredLines) ~= "table" then
-        PvP_Scalpel_DebugHistory.filteredLines = {}
-    end
-    if type(PvP_Scalpel_DebugHistory.locLines) ~= "table" then
-        PvP_Scalpel_DebugHistory.locLines = {}
-    end
-    return PvP_Scalpel_DebugHistory
-end
-
-local function EnsureKeptHistory()
-    return EnsureDebugHistoryStore().lines
-end
-
-local function EnsureFilteredHistory()
-    return EnsureDebugHistoryStore().filteredLines
-end
-
-local function EnsureLocHistory()
-    return EnsureDebugHistoryStore().locLines
-end
-
-local function TrimHistoryList(history, limit)
-    while #history > limit do
-        table.remove(history, 1)
-    end
-end
-
-local function TrimDebugHistory()
-    local store = EnsureDebugHistoryStore()
-    TrimHistoryList(store.lines, DEBUG_HISTORY_LIMIT)
-    TrimHistoryList(store.filteredLines, FILTERED_HISTORY_LIMIT)
-    TrimHistoryList(store.locLines, LOC_HISTORY_LIMIT)
-end
-
-local function PushDebugHistory(entry)
-    local history = EnsureKeptHistory()
-    table.insert(history, entry)
-    TrimHistoryList(history, DEBUG_HISTORY_LIMIT)
-end
-
-local function PushFilteredDebugHistory(entry)
-    local history = EnsureFilteredHistory()
-    table.insert(history, entry)
-    TrimHistoryList(history, FILTERED_HISTORY_LIMIT)
-end
-
-local function PushLocDebugHistory(entry)
-    local history = EnsureLocHistory()
-    table.insert(history, entry)
-    TrimHistoryList(history, LOC_HISTORY_LIMIT)
-end
-
-local function BuildGroupedHistoryFromLegacy(attemptEntry, outcomeEntry)
-    if type(outcomeEntry) ~= "table" then
-        return nil
-    end
-
-    return {
-        loggedAtText = outcomeEntry.loggedAtText or (attemptEntry and attemptEntry.loggedAtText) or date("%H:%M:%S"),
-        loggedAtEpoch = outcomeEntry.loggedAtEpoch or (attemptEntry and attemptEntry.loggedAtEpoch) or nil,
-        attemptLoggedAtText = (attemptEntry and attemptEntry.loggedAtText) or outcomeEntry.loggedAtText,
-        outcomeLoggedAtText = outcomeEntry.loggedAtText or (attemptEntry and attemptEntry.loggedAtText),
-        attemptSourceEvent = (attemptEntry and attemptEntry.sourceEvent) or outcomeEntry.sourceEvent,
-        outcomeSourceEvent = outcomeEntry.sourceEvent,
-        spellID = outcomeEntry.spellID or (attemptEntry and attemptEntry.spellID) or nil,
-        spellName = outcomeEntry.spellName or (attemptEntry and attemptEntry.spellName) or nil,
-        castGUID = outcomeEntry.castGUID or (attemptEntry and attemptEntry.castGUID) or nil,
-        castID = outcomeEntry.castID or (attemptEntry and attemptEntry.castID) or nil,
-        castType = outcomeEntry.castType or (attemptEntry and attemptEntry.castType) or nil,
-        targetName = outcomeEntry.targetName or (attemptEntry and attemptEntry.targetName) or nil,
-        interruptible = outcomeEntry.interruptible,
-        interruptedBy = outcomeEntry.interruptedBy,
-        outcome = outcomeEntry.outcome,
-        note = outcomeEntry.note or (attemptEntry and attemptEntry.note) or nil,
-        wasKeptByKickBypass = (attemptEntry and attemptEntry.wasKeptByKickBypass == true) or outcomeEntry.wasKeptByKickBypass == true,
+local function ResetSessionCollections()
+    activeSpellCaptureSession = {
+        active = false,
+        startedAt = nil,
+        groupedHistory = {},
+        locHistory = {},
+        castKeyCounter = 0,
     }
 end
 
-local function NormalizeDebugHistory()
-    local history = EnsureKeptHistory()
-    local hasLegacy = false
+local function ResetHeuristicRuntimeState()
+    heuristicRuntimeState = {
+        watchedUnits = {},
+        nameplateUnits = {},
+        pendingUserCc = {},
+        resolvedHeuristicEvents = {},
+        resolvedHeuristicKeys = {},
+        heuristicCastKeyCounter = 0,
+    }
+end
 
-    for i = 1, #history do
-        local entry = history[i]
-        if type(entry) == "table" and entry.kind ~= nil then
-            hasLegacy = true
-            break
+local function EnsureHeuristicRuntimeState()
+    if type(heuristicRuntimeState) ~= "table" then
+        ResetHeuristicRuntimeState()
+    end
+    if type(heuristicRuntimeState.watchedUnits) ~= "table" then
+        heuristicRuntimeState.watchedUnits = {}
+    end
+    if type(heuristicRuntimeState.nameplateUnits) ~= "table" then
+        heuristicRuntimeState.nameplateUnits = {}
+    end
+    if type(heuristicRuntimeState.pendingUserCc) ~= "table" then
+        heuristicRuntimeState.pendingUserCc = {}
+    end
+    if type(heuristicRuntimeState.resolvedHeuristicEvents) ~= "table" then
+        heuristicRuntimeState.resolvedHeuristicEvents = {}
+    end
+    if type(heuristicRuntimeState.resolvedHeuristicKeys) ~= "table" then
+        heuristicRuntimeState.resolvedHeuristicKeys = {}
+    end
+    if type(heuristicRuntimeState.heuristicCastKeyCounter) ~= "number" then
+        heuristicRuntimeState.heuristicCastKeyCounter = 0
+    end
+    return heuristicRuntimeState
+end
+
+local function EnsureHeuristicHistory()
+    PruneResolvedHeuristicEvents()
+    return EnsureHeuristicRuntimeState().resolvedHeuristicEvents
+end
+
+local function EnsureSessionCollections()
+    if type(activeSpellCaptureSession) ~= "table" then
+        ResetSessionCollections()
+    end
+    if type(activeSpellCaptureSession.groupedHistory) ~= "table" then
+        activeSpellCaptureSession.groupedHistory = {}
+    end
+    if type(activeSpellCaptureSession.locHistory) ~= "table" then
+        activeSpellCaptureSession.locHistory = {}
+    end
+    if type(activeSpellCaptureSession.castKeyCounter) ~= "number" then
+        activeSpellCaptureSession.castKeyCounter = 0
+    end
+    return activeSpellCaptureSession
+end
+
+local function EnsureKeptHistory()
+    return EnsureSessionCollections().groupedHistory
+end
+
+local function EnsureFilteredHistory()
+    return {}
+end
+
+local function EnsureLocHistory()
+    return EnsureSessionCollections().locHistory
+end
+
+local function PushDebugHistory(entry)
+    table.insert(EnsureKeptHistory(), entry)
+end
+
+local function PushFilteredDebugHistory(_entry)
+end
+
+local function PushLocDebugHistory(entry)
+    table.insert(EnsureLocHistory(), entry)
+end
+
+local function NormalizeDebugHistory()
+end
+
+local function ShouldRunLiveHeuristicRuntime()
+    return LIVE_VISIBLE_UNIT_CC_ATTRIBUTION_ENABLED == true
+        and (PvPScalpel_Debug == true or IsSpellCaptureSessionActive())
+end
+
+IsSpellCaptureSessionActive = function()
+    return type(activeSpellCaptureSession) == "table" and activeSpellCaptureSession.active == true
+end
+
+local function GetSpellCaptureSessionStart()
+    local session = EnsureSessionCollections()
+    if type(session.startedAt) == "number" then
+        return session.startedAt
+    end
+    return nil
+end
+
+local function GetElapsedSessionCentiseconds(atTime)
+    local sessionStart = GetSpellCaptureSessionStart()
+    local observedAt = atTime
+    if type(observedAt) ~= "number" then
+        observedAt = GetDebugNow()
+    end
+    if type(sessionStart) ~= "number" or type(observedAt) ~= "number" then
+        return -1
+    end
+    return math.max(0, math.floor(((observedAt - sessionStart) * 100) + 0.5))
+end
+
+local function GetCurrentRoundIndex()
+    if type(soloShuffleState) == "table"
+        and soloShuffleState.active == true
+        and type(soloShuffleState.currentRoundIndex) == "number"
+        and soloShuffleState.currentRoundIndex > 0 then
+        return soloShuffleState.currentRoundIndex
+    end
+    return 0
+end
+
+local function BuildTargetSnapshot()
+    if not (UnitExists and UnitExists("target")) then
+        return {
+            hasTarget = false,
+            targetName = nil,
+            disposition = "none",
+            isPlayer = nil,
+            canAttack = nil,
+            isFriend = nil,
+            reaction = nil,
+        }
+    end
+
+    local targetName = nil
+    if UnitName then
+        local ok, rawTargetName = pcall(UnitName, "target")
+        if ok then
+            targetName = ScrubOptionalString(rawTargetName)
         end
     end
 
-    if not hasLegacy then
-        TrimDebugHistory()
+    local isPlayer = UnitIsPlayer and UnitIsPlayer("target") or nil
+    local canAttack = UnitCanAttack and UnitCanAttack("player", "target") or nil
+    local isFriend = UnitIsFriend and UnitIsFriend("player", "target") or nil
+    local reaction = UnitReaction and UnitReaction("player", "target") or nil
+
+    local disposition = "unknown"
+    if canAttack == true then
+        disposition = "hostile"
+    elseif isFriend == true then
+        disposition = "friendly"
+    end
+
+    return {
+        hasTarget = true,
+        targetName = targetName,
+        disposition = disposition,
+        isPlayer = isPlayer,
+        canAttack = canAttack,
+        isFriend = isFriend,
+        reaction = reaction,
+    }
+end
+
+local function RefreshTargetSnapshot()
+    targetSnapshotCache = BuildTargetSnapshot()
+end
+
+local function AssignTargetSnapshot(castEntry, snapshot, targetName)
+    if type(castEntry) ~= "table" then
         return
     end
 
-    local normalized = {}
-    local pendingAttempts = {}
+    local safeTargetName = ScrubOptionalString(targetName)
+    if safeTargetName then
+        castEntry.targetName = safeTargetName
+    end
 
-    for i = 1, #history do
-        local entry = history[i]
-        if type(entry) == "table" then
-            if entry.kind == "attempt" then
-                pendingAttempts[entry.castGUID or i] = entry
-            elseif entry.kind == "outcome" then
-                local pendingKey = entry.castGUID or i
-                local grouped = BuildGroupedHistoryFromLegacy(pendingAttempts[pendingKey], entry)
-                if grouped then
-                    table.insert(normalized, grouped)
-                end
-                pendingAttempts[pendingKey] = nil
-            elseif entry.outcome ~= nil or entry.attemptSourceEvent ~= nil or entry.outcomeSourceEvent ~= nil then
-                table.insert(normalized, entry)
+    if type(snapshot) ~= "table" then
+        return
+    end
+
+    if type(castEntry.targetName) ~= "string" or castEntry.targetName == "" then
+        castEntry.targetName = snapshot.targetName
+    end
+    if type(castEntry.targetDisposition) ~= "string" then
+        castEntry.targetDisposition = snapshot.disposition or "none"
+    end
+    if castEntry.targetIsPlayer == nil then
+        castEntry.targetIsPlayer = snapshot.isPlayer
+    end
+    if castEntry.targetCanAttack == nil then
+        castEntry.targetCanAttack = snapshot.canAttack
+    end
+    if castEntry.targetIsFriend == nil then
+        castEntry.targetIsFriend = snapshot.isFriend
+    end
+    if castEntry.targetReaction == nil then
+        castEntry.targetReaction = snapshot.reaction
+    end
+end
+
+local function SafeUnitExists(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" or not UnitExists then
+        return false
+    end
+
+    local ok, exists = pcall(UnitExists, unitToken)
+    return ok and exists == true
+end
+
+local function SafeUnitGUID(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" or not UnitGUID then
+        return nil
+    end
+
+    local ok, guid = pcall(UnitGUID, unitToken)
+    if not ok then
+        return nil
+    end
+    return ScrubOptionalString(guid)
+end
+
+local function SafeUnitName(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" or not UnitName then
+        return nil
+    end
+
+    local ok, name = pcall(UnitName, unitToken)
+    if not ok then
+        return nil
+    end
+    return ScrubOptionalString(name)
+end
+
+local function SafeUnitIsUnit(leftUnit, rightUnit)
+    if type(leftUnit) ~= "string" or leftUnit == "" then
+        return false
+    end
+    if type(rightUnit) ~= "string" or rightUnit == "" or not UnitIsUnit then
+        return false
+    end
+
+    local ok, matches = pcall(UnitIsUnit, leftUnit, rightUnit)
+    return ok and matches == true
+end
+
+local function SafeGetLossOfControlDataByUnit(unitToken, index)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+    if type(index) ~= "number" or index <= 0 then
+        return nil
+    end
+    if not (C_LossOfControl and C_LossOfControl.GetActiveLossOfControlDataByUnit) then
+        return nil
+    end
+
+    local ok, data = pcall(C_LossOfControl.GetActiveLossOfControlDataByUnit, unitToken, index)
+    if not ok or type(data) ~= "table" then
+        return nil
+    end
+
+    data.displayText = ScrubOptionalString(data.displayText) or data.displayText
+    data.lockoutSchoolText = SafeGetSchoolString(data.lockoutSchool)
+    return data
+end
+
+local function SafeGetLossOfControlDataCountByUnit(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return 0
+    end
+    if not (C_LossOfControl and C_LossOfControl.GetActiveLossOfControlDataCountByUnit) then
+        return 0
+    end
+
+    local ok, count = pcall(C_LossOfControl.GetActiveLossOfControlDataCountByUnit, unitToken)
+    if ok and type(count) == "number" and count > 0 then
+        return count
+    end
+    return 0
+end
+
+local function SafeGetAuraDataByAuraInstanceID(unitToken, auraInstanceID)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return nil
+    end
+    if type(auraInstanceID) ~= "number" or auraInstanceID <= 0 then
+        return nil
+    end
+    if not (C_UnitAuras and C_UnitAuras.GetAuraDataByAuraInstanceID) then
+        return nil
+    end
+
+    local ok, auraData = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unitToken, auraInstanceID)
+    if not ok or type(auraData) ~= "table" then
+        return nil
+    end
+
+    auraData.name = ScrubOptionalString(auraData.name) or auraData.name
+    auraData.sourceUnit = ScrubOptionalString(auraData.sourceUnit) or auraData.sourceUnit
+    return auraData
+end
+
+local function GetAuraObservedSpellID(auraData)
+    if type(auraData) ~= "table" then
+        return nil
+    end
+    if type(auraData.spellId) == "number" then
+        return auraData.spellId
+    end
+    if type(auraData.spellID) == "number" then
+        return auraData.spellID
+    end
+    return nil
+end
+
+local function GetAuraObservedSourceUnit(auraData)
+    if type(auraData) ~= "table" then
+        return nil
+    end
+    return ScrubOptionalString(auraData.sourceUnit)
+end
+
+local function ShouldAcceptLocalOwnerSourceUnit(sourceUnit)
+    if type(sourceUnit) ~= "string" or sourceUnit == "" then
+        return false
+    end
+
+    return SafeUnitIsUnit("player", sourceUnit)
+        or SafeUnitIsUnit("pet", sourceUnit)
+        or SafeUnitIsUnit("vehicle", sourceUnit)
+end
+
+local function AddWatchedUnitToken(unitToken, kind)
+    local safeUnitToken = ScrubOptionalString(unitToken) or unitToken
+    if type(safeUnitToken) ~= "string" or safeUnitToken == "" then
+        return
+    end
+
+    local state = EnsureHeuristicRuntimeState()
+    state.watchedUnits[safeUnitToken] = kind or true
+    if string.sub(safeUnitToken, 1, 9) == "nameplate" then
+        state.nameplateUnits[safeUnitToken] = true
+    end
+end
+
+local function RemoveWatchedUnitToken(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return
+    end
+
+    local state = EnsureHeuristicRuntimeState()
+    state.watchedUnits[unitToken] = nil
+    state.nameplateUnits[unitToken] = nil
+end
+
+local function RefreshStaticWatchedUnits()
+    local state = EnsureHeuristicRuntimeState()
+    state.watchedUnits = {}
+
+    AddWatchedUnitToken("player", "self")
+    AddWatchedUnitToken("target", "target")
+    AddWatchedUnitToken("focus", "focus")
+
+    for i = 1, MAX_ARENA_UNIT_TOKENS do
+        AddWatchedUnitToken("arena" .. tostring(i), "arena")
+    end
+
+    for unitToken in pairs(state.nameplateUnits) do
+        AddWatchedUnitToken(unitToken, "nameplate")
+    end
+end
+
+local function IsWatchedUnitToken(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return false
+    end
+    return EnsureHeuristicRuntimeState().watchedUnits[unitToken] ~= nil
+end
+
+local function OnHeuristicLocWatcherEvent(self, event, unitToken, ...)
+    if ShouldRunLiveHeuristicRuntime() ~= true then
+        return
+    end
+
+    local watchedUnitToken = ScrubOptionalString(unitToken) or self.unitToken
+    if type(watchedUnitToken) ~= "string" or watchedUnitToken == "" then
+        return
+    end
+
+    if event == "LOSS_OF_CONTROL_ADDED" then
+        local effectIndex = ...
+        ScanWatchedUnitLossOfControl(watchedUnitToken, event, effectIndex)
+        return
+    end
+
+    if event == "LOSS_OF_CONTROL_UPDATE" then
+        ScanWatchedUnitLossOfControl(watchedUnitToken, event)
+    end
+end
+
+local function RegisterHeuristicLocWatcher(unitToken)
+    local safeUnitToken = ScrubOptionalString(unitToken) or unitToken
+    if type(safeUnitToken) ~= "string" or safeUnitToken == "" then
+        return
+    end
+
+    local watcherFrame = heuristicLocWatcherFrames[safeUnitToken]
+    if not watcherFrame then
+        watcherFrame = CreateFrame("Frame")
+        watcherFrame:SetScript("OnEvent", OnHeuristicLocWatcherEvent)
+        heuristicLocWatcherFrames[safeUnitToken] = watcherFrame
+    end
+
+    watcherFrame.unitToken = safeUnitToken
+    watcherFrame:RegisterUnitEvent("LOSS_OF_CONTROL_ADDED", safeUnitToken)
+    watcherFrame:RegisterUnitEvent("LOSS_OF_CONTROL_UPDATE", safeUnitToken)
+end
+
+local function UnregisterHeuristicLocWatcher(unitToken)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return
+    end
+
+    local watcherFrame = heuristicLocWatcherFrames[unitToken]
+    if not watcherFrame then
+        return
+    end
+
+    watcherFrame:UnregisterAllEvents()
+    watcherFrame:SetScript("OnEvent", nil)
+    watcherFrame.unitToken = nil
+    heuristicLocWatcherFrames[unitToken] = nil
+end
+
+local function RegisterStaticHeuristicLocWatchers()
+    RegisterHeuristicLocWatcher("player")
+    RegisterHeuristicLocWatcher("target")
+    RegisterHeuristicLocWatcher("focus")
+
+    for i = 1, MAX_ARENA_UNIT_TOKENS do
+        RegisterHeuristicLocWatcher("arena" .. tostring(i))
+    end
+end
+
+local function UnregisterAllHeuristicLocWatchers()
+    for unitToken in pairs(heuristicLocWatcherFrames) do
+        UnregisterHeuristicLocWatcher(unitToken)
+    end
+end
+
+local function PrunePendingUserCc()
+    local state = EnsureHeuristicRuntimeState()
+    local now = GetDebugNow()
+    local nextEntries = {}
+
+    for i = 1, #state.pendingUserCc do
+        local entry = state.pendingUserCc[i]
+        if type(entry) == "table"
+            and type(entry.expiresAt) == "number"
+            and now <= entry.expiresAt then
+            nextEntries[#nextEntries + 1] = entry
+        end
+    end
+
+    state.pendingUserCc = nextEntries
+end
+
+local function HasPendingUserCc()
+    PrunePendingUserCc()
+    return #EnsureHeuristicRuntimeState().pendingUserCc > 0
+end
+
+PruneResolvedHeuristicEvents = function()
+    local state = EnsureHeuristicRuntimeState()
+    local now = GetDebugNow()
+    local nextEntries = {}
+    local nextKeys = {}
+
+    for i = 1, #state.resolvedHeuristicEvents do
+        local entry = state.resolvedHeuristicEvents[i]
+        if type(entry) == "table"
+            and type(entry.observedAt) == "number"
+            and (now - entry.observedAt) <= HEURISTIC_EVENT_TTL_SECONDS then
+            nextEntries[#nextEntries + 1] = entry
+            if type(entry.dedupeKey) == "string" and entry.dedupeKey ~= "" then
+                nextKeys[entry.dedupeKey] = entry.observedAt
             end
         end
     end
 
-    PvP_Scalpel_DebugHistory.lines = normalized
-    TrimDebugHistory()
+    state.resolvedHeuristicEvents = nextEntries
+    state.resolvedHeuristicKeys = nextKeys
 end
 
 local function FindDebugChatFrame()
@@ -601,8 +998,21 @@ local function GetLocColor(entry)
     return 0.98, 0.60, 0.20
 end
 
+local function GetHeuristicColor(entry)
+    if type(entry) == "table" and entry.subkind == "user_gives_cc" then
+        return 0.60, 0.95, 1.00
+    end
+    return 1.00, 0.82, 0.45
+end
+
 local function ReplayHistoryRecord(chatFrame, entry)
     if not chatFrame or type(entry) ~= "table" then
+        return
+    end
+
+    if entry.kind == "heuristic" then
+        local r, g, b = GetHeuristicColor(entry)
+        chatFrame:AddMessage(tostring(entry.message or ""), r, g, b)
         return
     end
 
@@ -653,6 +1063,7 @@ local function ReplayDebugHistory(chatFrame)
     local history = EnsureKeptHistory()
     local filteredHistory = EnsureFilteredHistory()
     local locHistory = EnsureLocHistory()
+    local heuristicHistory = EnsureHeuristicHistory()
 
     for i = 1, #history do
         sequence = sequence + 1
@@ -674,6 +1085,14 @@ local function ReplayDebugHistory(chatFrame)
         sequence = sequence + 1
         mergedHistory[#mergedHistory + 1] = {
             entry = locHistory[i],
+            sequence = sequence,
+        }
+    end
+
+    for i = 1, #heuristicHistory do
+        sequence = sequence + 1
+        mergedHistory[#mergedHistory + 1] = {
+            entry = heuristicHistory[i],
             sequence = sequence,
         }
     end
@@ -778,12 +1197,406 @@ AppendLocToChat = function(locEntry)
     chatFrame:AddMessage(rendered, r, g, b)
 end
 
+local function AppendHeuristicEntryToChat(entry)
+    if PvPScalpel_Debug ~= true then
+        return
+    end
+    local chatFrame = FindDebugChatFrame()
+    if not chatFrame or not chatFrame.AddMessage then
+        return
+    end
+    local r, g, b = GetHeuristicColor(entry)
+    chatFrame:AddMessage(tostring(entry.message or ""), r, g, b)
+end
+
 function PvPScalpel_DebugSetEnabled(enabled)
     PvPScalpel_Debug = enabled == true
     if PvPScalpel_Debug then
         ShowDebugHistory()
     else
         CloseDebugChatFrame()
+    end
+end
+
+function RecordResolvedHeuristicEntry(subkind, dedupeKey, message)
+    if not ShouldRunLiveHeuristicRuntime() then
+        return
+    end
+
+    PruneResolvedHeuristicEvents()
+
+    local state = EnsureHeuristicRuntimeState()
+    if type(dedupeKey) == "string" and dedupeKey ~= "" and state.resolvedHeuristicKeys[dedupeKey] ~= nil then
+        return
+    end
+
+    local entry = {
+        kind = "heuristic",
+        subkind = subkind,
+        dedupeKey = dedupeKey,
+        message = message,
+        observedAt = GetDebugNow(),
+        loggedAtText = date("%H:%M:%S"),
+        loggedAtEpoch = GetDebugEpoch(),
+    }
+
+    state.resolvedHeuristicEvents[#state.resolvedHeuristicEvents + 1] = entry
+    if type(dedupeKey) == "string" and dedupeKey ~= "" then
+        state.resolvedHeuristicKeys[dedupeKey] = entry.observedAt
+    end
+    AppendHeuristicEntryToChat(entry)
+end
+
+function NextHeuristicCastKey()
+    local state = EnsureHeuristicRuntimeState()
+    state.heuristicCastKeyCounter = state.heuristicCastKeyCounter + 1
+    return state.heuristicCastKeyCounter
+end
+
+function MaybeArmPendingUserCc(castEntry)
+    if not ShouldRunLiveHeuristicRuntime() then
+        return
+    end
+    if type(castEntry) ~= "table" or castEntry.outcome ~= "success" then
+        return
+    end
+    if type(castEntry.spellID) ~= "number" then
+        return
+    end
+    if castEntry.shouldKeep ~= true then
+        return
+    end
+
+    local combatSignals = castEntry.combatSignals or nil
+    if type(combatSignals) ~= "table" or combatSignals.isSpellCrowdControl ~= true then
+        return
+    end
+
+    local resolvedAt = castEntry.resolveLoggedAtSeconds or GetDebugNow()
+    local state = EnsureHeuristicRuntimeState()
+    PrunePendingUserCc()
+    state.pendingUserCc[#state.pendingUserCc + 1] = {
+        castKey = type(castEntry.castKey) == "number" and castEntry.castKey or NextHeuristicCastKey(),
+        castGUID = castEntry.castGUID,
+        spellID = castEntry.spellID,
+        spellName = castEntry.spellName,
+        resolveTime = resolvedAt,
+        targetName = castEntry.targetName,
+        targetDisposition = castEntry.targetDisposition,
+        targetIsPlayer = castEntry.targetIsPlayer,
+        targetCanAttack = castEntry.targetCanAttack,
+        targetIsFriend = castEntry.targetIsFriend,
+        targetReaction = castEntry.targetReaction,
+        expiresAt = resolvedAt + HEURISTIC_CC_CORRELATION_WINDOW_SECONDS,
+    }
+end
+
+function GetObservedUnitLabel(unitToken)
+    return SafeUnitName(unitToken) or unitToken or "Unknown Unit"
+end
+
+function FindBestPendingUserCc(spellID, unitToken, observedAt)
+    if type(spellID) ~= "number" then
+        return nil, nil
+    end
+
+    PrunePendingUserCc()
+
+    local unitName = SafeUnitName(unitToken)
+    local bestIndex = nil
+    local bestCandidate = nil
+    local bestExactTargetMatch = false
+    local bestDelta = math.huge
+    local bestCastKey = -1
+
+    for i = 1, #EnsureHeuristicRuntimeState().pendingUserCc do
+        local candidate = EnsureHeuristicRuntimeState().pendingUserCc[i]
+        if type(candidate) == "table" and candidate.spellID == spellID then
+            local resolveTime = candidate.resolveTime or 0
+            local delta = math.abs((observedAt or GetDebugNow()) - resolveTime)
+            if delta <= HEURISTIC_CC_CORRELATION_WINDOW_SECONDS then
+                local exactTargetMatch = type(candidate.targetName) == "string"
+                    and candidate.targetName ~= ""
+                    and type(unitName) == "string"
+                    and unitName ~= ""
+                    and candidate.targetName == unitName
+                local castKey = type(candidate.castKey) == "number" and candidate.castKey or -1
+                if bestIndex == nil
+                    or (exactTargetMatch and not bestExactTargetMatch)
+                    or (exactTargetMatch == bestExactTargetMatch and delta < bestDelta)
+                    or (exactTargetMatch == bestExactTargetMatch and delta == bestDelta and castKey > bestCastKey) then
+                    bestIndex = i
+                    bestCandidate = candidate
+                    bestExactTargetMatch = exactTargetMatch
+                    bestDelta = delta
+                    bestCastKey = castKey
+                end
+            end
+        end
+    end
+
+    return bestIndex, bestCandidate
+end
+
+function ResolveUserGivesCcFromAura(unitToken, auraData, observedVia)
+    if not HasPendingUserCc() then
+        return false
+    end
+    if type(unitToken) ~= "string" or unitToken == "" or unitToken == "player" then
+        return false
+    end
+    if type(auraData) ~= "table" then
+        return false
+    end
+
+    local sourceUnit = GetAuraObservedSourceUnit(auraData)
+    if ShouldAcceptLocalOwnerSourceUnit(sourceUnit) ~= true then
+        return false
+    end
+
+    local auraSpellID = GetAuraObservedSpellID(auraData)
+    if type(auraSpellID) ~= "number" then
+        return false
+    end
+
+    local observedAt = GetDebugNow()
+    local pendingIndex, pendingCandidate = FindBestPendingUserCc(auraSpellID, unitToken, observedAt)
+    if not pendingIndex or type(pendingCandidate) ~= "table" then
+        return false
+    end
+
+    local unitGuid = SafeUnitGUID(unitToken)
+    local dedupeKey = table.concat({
+        "give",
+        tostring(pendingCandidate.castKey or 0),
+        tostring(unitGuid or unitToken or "-"),
+        tostring(auraSpellID),
+    }, "|")
+
+    local message = string.format(
+        "Your CC %s likely landed on %s. | conf=strong_visible_unit token=%s guid=%s via=%s",
+        tostring(pendingCandidate.spellName or ResolveSpellName(pendingCandidate.spellID)),
+        tostring(GetObservedUnitLabel(unitToken)),
+        tostring(unitToken),
+        tostring(unitGuid or "-"),
+        tostring(observedVia or "aura")
+    )
+
+    table.remove(EnsureHeuristicRuntimeState().pendingUserCc, pendingIndex)
+    RecordResolvedHeuristicEntry("user_gives_cc", dedupeKey, message)
+    return true
+end
+
+local function FindMatchingPlayerLocDataForAura(auraData)
+    if type(auraData) ~= "table" then
+        return nil
+    end
+
+    local expectedAuraInstanceID = type(auraData.auraInstanceID) == "number" and auraData.auraInstanceID or 0
+    local expectedSpellID = GetAuraObservedSpellID(auraData)
+    local count = SafeGetLossOfControlDataCount()
+
+    for index = 1, count do
+        local locData = SafeGetLossOfControlData(index)
+        if type(locData) == "table" then
+            if expectedAuraInstanceID > 0 and locData.auraInstanceID == expectedAuraInstanceID then
+                return locData
+            end
+            if type(expectedSpellID) == "number" and locData.spellID == expectedSpellID then
+                return locData
+            end
+        end
+    end
+
+    return nil
+end
+
+function RecordUnattributedUserTakesCc(locData, observedVia)
+    if type(locData) ~= "table" then
+        return
+    end
+
+    local auraInstanceID = type(locData.auraInstanceID) == "number" and locData.auraInstanceID or 0
+    local dedupeKey = table.concat({
+        "take-unattributed",
+        tostring(auraInstanceID),
+        tostring(locData.spellID or "-"),
+        tostring(locData.locType or "-"),
+    }, "|")
+
+    local message = string.format(
+        "%s | conf=unattributed via=%s",
+        BuildLocSentence(locData),
+        tostring(observedVia or "aura")
+    )
+
+    RecordResolvedHeuristicEntry("user_takes_cc", dedupeKey, message)
+end
+
+function ResolveUserTakesCcFromAura(unitToken, locData, auraData, observedVia)
+    if type(unitToken) ~= "string" or unitToken ~= "player" then
+        return false
+    end
+    if type(locData) ~= "table" or type(auraData) ~= "table" then
+        return false
+    end
+
+    local sourceUnit = GetAuraObservedSourceUnit(auraData)
+    if type(sourceUnit) ~= "string" or sourceUnit == "" then
+        return false
+    end
+
+    local sourceGuid = SafeUnitGUID(sourceUnit)
+    if type(sourceGuid) ~= "string" or sourceGuid == "" then
+        return false
+    end
+
+    local auraInstanceID = type(locData.auraInstanceID) == "number" and locData.auraInstanceID or 0
+    local dedupeKey = table.concat({
+        "take",
+        tostring(auraInstanceID),
+        tostring(locData.spellID or "-"),
+        tostring(sourceGuid),
+        tostring(locData.locType or "-"),
+    }, "|")
+
+    local message = string.format(
+        "%s | byGuid=%s token=%s conf=strong_visible_unit via=%s",
+        BuildLocSentence(locData),
+        tostring(sourceGuid),
+        tostring(sourceUnit),
+        tostring(observedVia or "aura")
+    )
+
+    RecordResolvedHeuristicEntry("user_takes_cc", dedupeKey, message)
+    return true
+end
+
+function HandleHeuristicAuraObservation(unitToken, auraData, observedVia)
+    if type(auraData) ~= "table" then
+        return
+    end
+
+    ResolveUserGivesCcFromAura(unitToken, auraData, observedVia)
+    if unitToken == "player" then
+        local locData = FindMatchingPlayerLocDataForAura(auraData)
+        if locData then
+            if not ResolveUserTakesCcFromAura(unitToken, locData, auraData, observedVia) then
+                RecordUnattributedUserTakesCc(locData, observedVia)
+            end
+        end
+    end
+end
+
+function HandleHeuristicLossOfControlObservation(unitToken, locData, observedVia)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return
+    end
+    if type(locData) ~= "table" then
+        return
+    end
+
+    local auraInstanceID = locData.auraInstanceID
+    if type(auraInstanceID) ~= "number" or auraInstanceID <= 0 then
+        return
+    end
+
+    local auraData = SafeGetAuraDataByAuraInstanceID(unitToken, auraInstanceID)
+    if type(auraData) ~= "table" then
+        if unitToken == "player" then
+            RecordUnattributedUserTakesCc(locData, observedVia)
+        end
+        return
+    end
+
+    ResolveUserGivesCcFromAura(unitToken, auraData, observedVia)
+    if unitToken == "player" and not ResolveUserTakesCcFromAura(unitToken, locData, auraData, observedVia) then
+        RecordUnattributedUserTakesCc(locData, observedVia)
+    end
+end
+
+function ScanWatchedUnitLossOfControl(unitToken, sourceEvent, effectIndex)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return
+    end
+    if IsWatchedUnitToken(unitToken) ~= true or SafeUnitExists(unitToken) ~= true then
+        return
+    end
+
+    if type(effectIndex) == "number" and effectIndex > 0 then
+        local locData = SafeGetLossOfControlDataByUnit(unitToken, effectIndex)
+        if locData then
+            HandleHeuristicLossOfControlObservation(unitToken, locData, sourceEvent)
+        end
+        return
+    end
+
+    local count = SafeGetLossOfControlDataCountByUnit(unitToken)
+    for index = 1, count do
+        local locData = SafeGetLossOfControlDataByUnit(unitToken, index)
+        if locData then
+            HandleHeuristicLossOfControlObservation(unitToken, locData, sourceEvent)
+        end
+    end
+end
+
+function HandleHeuristicUnitAura(unitToken, updateInfo)
+    if type(unitToken) ~= "string" or unitToken == "" then
+        return
+    end
+    if IsWatchedUnitToken(unitToken) ~= true or SafeUnitExists(unitToken) ~= true then
+        return
+    end
+
+    if type(updateInfo) == "table" and type(updateInfo.addedAuras) == "table" then
+        for i = 1, #updateInfo.addedAuras do
+            HandleHeuristicAuraObservation(unitToken, updateInfo.addedAuras[i], "aura")
+        end
+    end
+
+    if type(updateInfo) == "table" and type(updateInfo.updatedAuraInstanceIDs) == "table" then
+        for i = 1, #updateInfo.updatedAuraInstanceIDs do
+            local auraInstanceID = updateInfo.updatedAuraInstanceIDs[i]
+            local auraData = SafeGetAuraDataByAuraInstanceID(unitToken, auraInstanceID)
+            if auraData then
+                HandleHeuristicAuraObservation(unitToken, auraData, "aura")
+            end
+        end
+    end
+end
+
+function HandleHeuristicPlayerTargetChanged()
+    RefreshTargetSnapshot()
+    if ShouldRunLiveHeuristicRuntime() and HasPendingUserCc() then
+        ScanWatchedUnitLossOfControl("target", "target")
+    end
+end
+
+function HandleHeuristicPlayerFocusChanged()
+    if ShouldRunLiveHeuristicRuntime() and HasPendingUserCc() then
+        ScanWatchedUnitLossOfControl("focus", "focus")
+    end
+end
+
+function HandleHeuristicNameplateAdded(unitToken)
+    AddWatchedUnitToken(unitToken, "nameplate")
+    RegisterHeuristicLocWatcher(unitToken)
+    if ShouldRunLiveHeuristicRuntime() and HasPendingUserCc() then
+        ScanWatchedUnitLossOfControl(unitToken, "nameplate")
+    end
+end
+
+function HandleHeuristicNameplateRemoved(unitToken)
+    RemoveWatchedUnitToken(unitToken)
+    UnregisterHeuristicLocWatcher(unitToken)
+end
+
+function ResetHeuristicRuntimeForWorld()
+    UnregisterAllHeuristicLocWatchers()
+    ResetHeuristicRuntimeState()
+    RefreshStaticWatchedUnits()
+    if spellTrackingRegistered then
+        RegisterStaticHeuristicLocWatchers()
     end
 end
 
@@ -886,8 +1699,8 @@ local function SafeIsPlayerMoving()
     return nil
 end
 
-local function SafeGetSchoolString(lockoutSchool)
-    if type(lockoutSchool) ~= "number" or lockoutSchool == 0 or not (C_Spell and C_Spell.GetSchoolString) then
+SafeGetSchoolString = function(lockoutSchool)
+    if type(lockoutSchool) ~= "number" or not (C_Spell and C_Spell.GetSchoolString) then
         return nil
     end
 
@@ -1337,19 +2150,31 @@ end
 local function EnsureCastEntry(castGUID, spellID)
     local entry = debugCastByGuid[castGUID]
     if not entry then
+        local session = EnsureSessionCollections()
+        session.castKeyCounter = session.castKeyCounter + 1
         entry = {
+            castKey = session.castKeyCounter,
+            roundIndex = GetCurrentRoundIndex(),
             castGUID = castGUID,
             spellID = spellID,
             spellName = ResolveSpellName(spellID),
             castType = nil,
             targetName = nil,
+            targetDisposition = nil,
+            targetIsPlayer = nil,
+            targetCanAttack = nil,
+            targetIsFriend = nil,
+            targetReaction = nil,
             interruptible = nil,
             castID = nil,
             attemptSourceEvent = nil,
             attemptLoggedAtText = nil,
+            attemptLoggedAtSeconds = nil,
             outcomeSourceEvent = nil,
             outcomeLoggedAtText = nil,
+            resolveLoggedAtSeconds = nil,
             interruptedBy = nil,
+            linkedLocEntry = nil,
             outcome = nil,
             note = nil,
             filterReason = nil,
@@ -1403,8 +2228,12 @@ local function BuildGroupedHistoryEntry(castEntry)
     local loggedAtText = castEntry.outcomeLoggedAtText or castEntry.attemptLoggedAtText or date("%H:%M:%S")
 
     return {
+        castKey = castEntry.castKey,
+        roundIndex = castEntry.roundIndex or 0,
         loggedAtText = loggedAtText,
         loggedAtEpoch = castEntry.loggedAtEpoch or GetDebugEpoch(),
+        attemptTimeCs = GetElapsedSessionCentiseconds(castEntry.attemptLoggedAtSeconds),
+        resolveTimeCs = GetElapsedSessionCentiseconds(castEntry.resolveLoggedAtSeconds),
         attemptLoggedAtText = castEntry.attemptLoggedAtText or loggedAtText,
         outcomeLoggedAtText = castEntry.outcomeLoggedAtText or loggedAtText,
         attemptSourceEvent = castEntry.attemptSourceEvent,
@@ -1415,8 +2244,14 @@ local function BuildGroupedHistoryEntry(castEntry)
         castID = castEntry.castID,
         castType = castEntry.castType,
         targetName = castEntry.targetName,
+        targetDisposition = castEntry.targetDisposition,
+        targetIsPlayer = castEntry.targetIsPlayer,
+        targetCanAttack = castEntry.targetCanAttack,
+        targetIsFriend = castEntry.targetIsFriend,
+        targetReaction = castEntry.targetReaction,
         interruptible = castEntry.interruptible,
         interruptedBy = castEntry.interruptedBy,
+        linkedLoc = 0,
         outcome = castEntry.outcome,
         note = castEntry.note,
         wasKeptByKickBypass = castEntry.wasKeptByKickBypass == true,
@@ -1437,6 +2272,7 @@ local function BuildGroupedHistoryEntry(castEntry)
         sawChannelStart = castEntry.sawChannelStart == true,
         sawEmpowerStart = castEntry.sawEmpowerStart == true,
         isSucceededOnlyInstant = castEntry.isSucceededOnlyInstant == true,
+        _linkedLocEntry = castEntry.linkedLocEntry,
     }
 end
 
@@ -1491,8 +2327,12 @@ end
 
 local function BuildLocHistoryEntry(locData, sourceEvent)
     return {
+        locKey = 0,
+        roundIndex = GetCurrentRoundIndex(),
         loggedAtText = date("%H:%M:%S"),
         loggedAtEpoch = GetDebugEpoch(),
+        timeCs = GetElapsedSessionCentiseconds(),
+        entryKind = "observed",
         sourceEvent = sourceEvent,
         locType = locData.locType,
         spellID = locData.spellID,
@@ -1504,6 +2344,7 @@ local function BuildLocHistoryEntry(locData, sourceEvent)
         priority = locData.priority,
         displayType = locData.displayType,
         auraInstanceID = locData.auraInstanceID,
+        issuedByGuid = "",
         linkedCastGUID = nil,
         linkedSpellID = nil,
         linkedOutcome = nil,
@@ -1621,9 +2462,16 @@ local function LinkLocRecordToCast(locEntry, historyEntry, liveCastEntry)
     locEntry.linkedSpellID = historyEntry.spellID
     locEntry.linkedOutcome = historyEntry.outcome
     locEntry.linkedInterruptedBy = historyEntry.interruptedBy
+    if type(historyEntry.interruptedBy) == "string" and historyEntry.interruptedBy ~= "" then
+        locEntry.issuedByGuid = historyEntry.interruptedBy
+    end
+    historyEntry._linkedLocEntry = locEntry
 
     ApplyLocFieldsToTarget(historyEntry, locEntry)
-    ApplyLocFieldsToTarget(liveCastEntry, locEntry)
+    if type(liveCastEntry) == "table" then
+        ApplyLocFieldsToTarget(liveCastEntry, locEntry)
+        liveCastEntry.linkedLocEntry = locEntry
+    end
     return true
 end
 
@@ -1804,12 +2652,11 @@ local function RefreshActiveLocState(sourceEvent)
 end
 
 local function RecordFilteredCast(castEntry)
-    if not castEntry then
+    if PvPScalpel_Debug ~= true then
         return
     end
 
     local filteredEntry = BuildFilteredHistoryEntry(castEntry)
-    PushFilteredDebugHistory(filteredEntry)
     AppendFilteredToChat(filteredEntry)
 end
 
@@ -1878,7 +2725,9 @@ local function LogCastAttempt(castEntry, sourceEvent)
     end
 
     castEntry.attemptSourceEvent = sourceEvent
+    castEntry.roundIndex = castEntry.roundIndex or GetCurrentRoundIndex()
     castEntry.attemptLoggedAtText = date("%H:%M:%S")
+    castEntry.attemptLoggedAtSeconds = GetDebugNow()
     castEntry.attemptLogged = true
     AppendAttemptToChat(castEntry)
     return true
@@ -1897,15 +2746,22 @@ local function ResolveOutcome(castEntry, outcome, sourceEvent)
     castEntry.outcome = outcome
     castEntry.outcomeSourceEvent = sourceEvent
     castEntry.outcomeLoggedAtText = date("%H:%M:%S")
+    castEntry.resolveLoggedAtSeconds = GetDebugNow()
     castEntry.loggedAtEpoch = GetDebugEpoch()
     castEntry.pendingStopAt = nil
     castEntry.pendingFailureSourceEvent = nil
 
-    local historyEntry = BuildGroupedHistoryEntry(castEntry)
-    PushDebugHistory(historyEntry)
-    RegisterRecentResolvedCast(historyEntry)
-    MaybeLinkRecentLocToCast(historyEntry, castEntry)
+    local historyEntry = nil
+    if IsSpellCaptureSessionActive() then
+        historyEntry = BuildGroupedHistoryEntry(castEntry)
+        PushDebugHistory(historyEntry)
+        RegisterRecentResolvedCast(historyEntry)
+        MaybeLinkRecentLocToCast(historyEntry, castEntry)
+    end
+
     AppendOutcomeToChat(castEntry)
+
+    MaybeArmPendingUserCc(castEntry)
 
     MarkResolvedCast(castEntry.castGUID)
     RemoveCastEntry(castEntry.castGUID)
@@ -2096,12 +2952,16 @@ local function EnsureCastPrepared(castGUID, spellID, castType, note, sourceEvent
     end
 
     local castEntry = EnsureCastEntry(castGUID, spellID)
+    if castEntry.roundIndex == nil then
+        castEntry.roundIndex = GetCurrentRoundIndex()
+    end
     if castType and not castEntry.castType then
         castEntry.castType = castType
     end
     if note and not castEntry.note then
         castEntry.note = note
     end
+    AssignTargetSnapshot(castEntry, targetSnapshotCache)
     if sourceEvent then
         TrackCastProvenance(castEntry, sourceEvent)
     end
@@ -2119,10 +2979,7 @@ local function HandleSent(castGUID, spellID, targetName)
         return
     end
 
-    local safeTargetName = ScrubOptionalString(targetName)
-    if safeTargetName then
-        castEntry.targetName = safeTargetName
-    end
+    AssignTargetSnapshot(castEntry, targetSnapshotCache, targetName)
 end
 
 local function HandleStart(castGUID, spellID)
@@ -2323,8 +3180,477 @@ local function HandleLossOfControlUpdate(unit)
     RefreshActiveLocState("LOSS_OF_CONTROL_UPDATE")
 end
 
+local function IsPlayerSpellcastLifecycleEvent(eventName)
+    return eventName == "UNIT_SPELLCAST_SENT"
+        or eventName == "UNIT_SPELLCAST_START"
+        or eventName == "UNIT_SPELLCAST_STOP"
+        or eventName == "UNIT_SPELLCAST_SUCCEEDED"
+        or eventName == "UNIT_SPELLCAST_FAILED"
+        or eventName == "UNIT_SPELLCAST_FAILED_QUIET"
+        or eventName == "UNIT_SPELLCAST_INTERRUPTED"
+        or eventName == "UNIT_SPELLCAST_CHANNEL_START"
+        or eventName == "UNIT_SPELLCAST_CHANNEL_STOP"
+        or eventName == "UNIT_SPELLCAST_EMPOWER_START"
+        or eventName == "UNIT_SPELLCAST_EMPOWER_STOP"
+        or eventName == "UNIT_SPELLCAST_INTERRUPTIBLE"
+        or eventName == "UNIT_SPELLCAST_NOT_INTERRUPTIBLE"
+end
+
+local function OnHeuristicUnitEvent(_, event, ...)
+    if event == "PLAYER_ENTERING_WORLD" then
+        ResetHeuristicRuntimeForWorld()
+        return
+    end
+
+    if event == "PLAYER_TARGET_CHANGED" then
+        HandleHeuristicPlayerTargetChanged()
+        return
+    end
+
+    if event == "PLAYER_FOCUS_CHANGED" then
+        HandleHeuristicPlayerFocusChanged()
+        return
+    end
+
+    if event == "NAME_PLATE_UNIT_ADDED" then
+        local unitToken = ...
+        HandleHeuristicNameplateAdded(unitToken)
+        return
+    end
+
+    if event == "NAME_PLATE_UNIT_REMOVED" then
+        local unitToken = ...
+        HandleHeuristicNameplateRemoved(unitToken)
+        return
+    end
+
+    if ShouldRunLiveHeuristicRuntime() ~= true then
+        return
+    end
+
+    if event == "UNIT_AURA" then
+        local unitToken, updateInfo = ...
+        if unitToken == "player" or HasPendingUserCc() then
+            HandleHeuristicUnitAura(unitToken, updateInfo)
+        end
+        return
+    end
+
+    if event == "LOSS_OF_CONTROL_ADDED" then
+        local unitToken, effectIndex = ...
+        if unitToken == "player" or HasPendingUserCc() then
+            ScanWatchedUnitLossOfControl(unitToken, "aura", effectIndex)
+        end
+        return
+    end
+
+    if event == "LOSS_OF_CONTROL_UPDATE" then
+        local unitToken = ...
+        if unitToken == "player" or HasPendingUserCc() then
+            ScanWatchedUnitLossOfControl(unitToken, "aura")
+        end
+    end
+end
+
+local function ResetRuntimeCaptureState()
+    debugCastByGuid = {}
+    resolvedCastByGuid = {}
+    recentResolvedCastHistory = {}
+    recentLocHistory = {}
+    activeLocByKey = {}
+    activeCastGuid = nil
+    targetSnapshotCache = nil
+    RefreshRuntimeStateCache()
+    RefreshMovementStateCache()
+end
+
+function MapTriStateBoolean(value)
+    if value == true then
+        return 1
+    end
+    if value == false then
+        return 0
+    end
+    return 2
+end
+
+function MapCastType(castType)
+    if castType == "cast" then
+        return 1
+    end
+    if castType == "instant" then
+        return 2
+    end
+    if castType == "channel" then
+        return 3
+    end
+    if castType == "empower" then
+        return 4
+    end
+    return -1
+end
+
+function MapOutcome(outcome)
+    if outcome == "success" then
+        return 0
+    end
+    if outcome == "not_success" then
+        return 1
+    end
+    if outcome == "interrupted" then
+        return 2
+    end
+    if outcome == "kicked" then
+        return 3
+    end
+    if outcome == "cancelled" then
+        return 4
+    end
+    return -1
+end
+
+function MapFirstObservedEvent(eventName)
+    if eventName == "UNIT_SPELLCAST_SENT" then
+        return 1
+    end
+    if eventName == "UNIT_SPELLCAST_START" then
+        return 2
+    end
+    if eventName == "UNIT_SPELLCAST_CHANNEL_START" then
+        return 3
+    end
+    if eventName == "UNIT_SPELLCAST_EMPOWER_START" then
+        return 4
+    end
+    if eventName == "UNIT_SPELLCAST_SUCCEEDED" then
+        return 5
+    end
+    if eventName == "UNIT_SPELLCAST_FAILED" then
+        return 6
+    end
+    if eventName == "UNIT_SPELLCAST_FAILED_QUIET" then
+        return 7
+    end
+    if eventName == "UNIT_SPELLCAST_INTERRUPTED" then
+        return 8
+    end
+    return -1
+end
+
+function MapOutcomeEvent(eventName)
+    if eventName == "UNIT_SPELLCAST_SUCCEEDED" then
+        return 1
+    end
+    if eventName == "UNIT_SPELLCAST_FAILED" then
+        return 2
+    end
+    if eventName == "UNIT_SPELLCAST_FAILED_QUIET" then
+        return 3
+    end
+    if eventName == "UNIT_SPELLCAST_INTERRUPTED" then
+        return 4
+    end
+    if eventName == "UNIT_SPELLCAST_CHANNEL_STOP" then
+        return 5
+    end
+    if eventName == "UNIT_SPELLCAST_EMPOWER_STOP" then
+        return 6
+    end
+    if eventName == "UNIT_SPELLCAST_STOP" then
+        return 7
+    end
+    return -1
+end
+
+function MapTargetDisposition(disposition)
+    if disposition == "none" then
+        return 0
+    end
+    if disposition == "unknown" then
+        return 1
+    end
+    if disposition == "friendly" then
+        return 2
+    end
+    if disposition == "hostile" then
+        return 3
+    end
+    return -1
+end
+
+function MapLocSourceEvent(eventName)
+    if eventName == "LOSS_OF_CONTROL_ADDED" then
+        return 1
+    end
+    if eventName == "LOSS_OF_CONTROL_UPDATE" then
+        return 2
+    end
+    return 0
+end
+
+function MapLocEntryKind(entryKind)
+    if entryKind == "observed" then
+        return 1
+    end
+    return 0
+end
+
+function MapManualStopReason(reason)
+    if reason == "movement_stop" then
+        return 1
+    end
+    return 0
+end
+
+function BuildProvenanceFlags(entry)
+    local flags = 0
+    if entry and entry.sawSent == true then
+        flags = flags + 1
+    end
+    if entry and entry.sawStart == true then
+        flags = flags + 2
+    end
+    if entry and entry.sawChannelStart == true then
+        flags = flags + 4
+    end
+    if entry and entry.sawEmpowerStart == true then
+        flags = flags + 8
+    end
+    if entry and entry.isSucceededOnlyInstant == true then
+        flags = flags + 16
+    end
+    return flags
+end
+
+function SecondsToCs(value)
+    if type(value) ~= "number" then
+        return -1
+    end
+    return math.max(0, math.floor((value * 100) + 0.5))
+end
+
+function GetCastSchemaRow()
+    return {
+        { "castKey", "u16", "-1=invalid" },
+        { "roundIndex", "u8", "0=no round" },
+        { "attemptTimeCs", "i32", "-1=missing" },
+        { "resolveTimeCs", "i32", "-1=missing" },
+        { "castType", "u8", "-1=unknown" },
+        { "outcome", "u8", "-1=unknown" },
+        { "interruptibleState", "u8", "2=unknown" },
+        { "firstObservedEvent", "u8", "-1=unknown" },
+        { "outcomeEvent", "u8", "-1=unknown" },
+        { "targetName", "string", "\"\"=none" },
+        { "targetDisposition", "u8", "-1=unknown" },
+        { "targetIsPlayer", "u8", "2=unknown" },
+        { "targetCanAttack", "u8", "2=unknown" },
+        { "targetIsFriend", "u8", "2=unknown" },
+        { "targetReaction", "i8", "-1=unknown" },
+        { "interruptedBy", "string", "\"\"=none" },
+        { "linkedLoc", "u16", "0=no link" },
+        { "manualStopReason", "u8", "0=none" },
+        { "provenanceFlags", "u8", "0=none" },
+    }
+end
+
+function GetLocSchemaRow()
+    return {
+        { "locKey", "u16", "-1=invalid" },
+        { "roundIndex", "u8", "0=no round" },
+        { "timeCs", "i32", "-1=missing" },
+        { "entryKind", "u8", "0=unknown" },
+        { "sourceEvent", "u8", "0=unknown" },
+        { "locType", "string", "\"\"=missing" },
+        { "spellID", "i32", "-1=missing" },
+        { "displayText", "string", "\"\"=missing" },
+        { "durationCs", "i32", "-1=missing" },
+        { "lockoutSchool", "i16", "0=none" },
+        { "lockoutSchoolText", "string", "\"\"=none" },
+        { "auraInstanceID", "i32", "0=none" },
+        { "issuedByGuid", "string", "\"\"=none" },
+    }
+end
+
+local function SerializeLocalLossOfControl()
+    local history = EnsureLocHistory()
+    local entries = {
+        [0] = GetLocSchemaRow(),
+    }
+    local rowIndexByEntry = {}
+    local linkedCount = 0
+
+    for i = 1, #history do
+        local entry = history[i]
+        if type(entry) == "table" then
+            local rowIndex = #entries + 1
+            entry.locKey = rowIndex
+            entries[rowIndex] = {
+                rowIndex,
+                type(entry.roundIndex) == "number" and entry.roundIndex or 0,
+                type(entry.timeCs) == "number" and entry.timeCs or -1,
+                MapLocEntryKind(entry.entryKind),
+                MapLocSourceEvent(entry.sourceEvent),
+                type(entry.locType) == "string" and entry.locType or "",
+                type(entry.spellID) == "number" and entry.spellID or -1,
+                type(entry.displayText) == "string" and entry.displayText or "",
+                SecondsToCs(entry.duration),
+                type(entry.lockoutSchool) == "number" and entry.lockoutSchool or 0,
+                type(entry.lockoutSchoolText) == "string" and entry.lockoutSchoolText or "",
+                type(entry.auraInstanceID) == "number" and entry.auraInstanceID or 0,
+                type(entry.issuedByGuid) == "string" and entry.issuedByGuid or "",
+            }
+            rowIndexByEntry[entry] = rowIndex
+            if type(entry.linkedCastGUID) == "string" and entry.linkedCastGUID ~= "" then
+                linkedCount = linkedCount + 1
+            end
+        end
+    end
+
+    return {
+        captureVersion = 1,
+        timeUnit = "cs",
+        totals = {
+            entries = #history,
+            linked = linkedCount,
+            unlinked = #history - linkedCount,
+        },
+        entries = entries,
+    }, rowIndexByEntry
+end
+
+local function SerializeLocalSpellCapture(locRowIndexByEntry)
+    local groupedHistory = EnsureKeptHistory()
+    local bySpellID = {}
+    local totals = {
+        spells = 0,
+        casts = 0,
+        success = 0,
+        notSuccess = 0,
+        interrupted = 0,
+        kicked = 0,
+        cancelled = 0,
+    }
+
+    for i = 1, #groupedHistory do
+        local entry = groupedHistory[i]
+        if type(entry) == "table" and type(entry.spellID) == "number" then
+            local spellBucket = bySpellID[entry.spellID]
+            if not spellBucket then
+                spellBucket = {
+                    spellName = entry.spellName or ResolveSpellName(entry.spellID),
+                    counts = {
+                        attempts = 0,
+                        success = 0,
+                        notSuccess = 0,
+                        interrupted = 0,
+                        kicked = 0,
+                        cancelled = 0,
+                    },
+                    casts = {
+                        [0] = GetCastSchemaRow(),
+                    },
+                }
+                bySpellID[entry.spellID] = spellBucket
+                totals.spells = totals.spells + 1
+            end
+
+            local linkedLoc = 0
+            if type(entry._linkedLocEntry) == "table" then
+                linkedLoc = locRowIndexByEntry[entry._linkedLocEntry] or 0
+            end
+
+            spellBucket.counts.attempts = spellBucket.counts.attempts + 1
+            totals.casts = totals.casts + 1
+
+            if entry.outcome == "success" then
+                spellBucket.counts.success = spellBucket.counts.success + 1
+                totals.success = totals.success + 1
+            elseif entry.outcome == "not_success" then
+                spellBucket.counts.notSuccess = spellBucket.counts.notSuccess + 1
+                totals.notSuccess = totals.notSuccess + 1
+            elseif entry.outcome == "interrupted" then
+                spellBucket.counts.interrupted = spellBucket.counts.interrupted + 1
+                totals.interrupted = totals.interrupted + 1
+            elseif entry.outcome == "kicked" then
+                spellBucket.counts.kicked = spellBucket.counts.kicked + 1
+                totals.kicked = totals.kicked + 1
+            elseif entry.outcome == "cancelled" then
+                spellBucket.counts.cancelled = spellBucket.counts.cancelled + 1
+                totals.cancelled = totals.cancelled + 1
+            end
+
+            table.insert(spellBucket.casts, {
+                type(entry.castKey) == "number" and entry.castKey or -1,
+                type(entry.roundIndex) == "number" and entry.roundIndex or 0,
+                type(entry.attemptTimeCs) == "number" and entry.attemptTimeCs or -1,
+                type(entry.resolveTimeCs) == "number" and entry.resolveTimeCs or -1,
+                MapCastType(entry.castType),
+                MapOutcome(entry.outcome),
+                MapTriStateBoolean(entry.interruptible),
+                MapFirstObservedEvent(entry.firstObservedEvent),
+                MapOutcomeEvent(entry.outcomeSourceEvent),
+                type(entry.targetName) == "string" and entry.targetName or "",
+                MapTargetDisposition(entry.targetDisposition),
+                MapTriStateBoolean(entry.targetIsPlayer),
+                MapTriStateBoolean(entry.targetCanAttack),
+                MapTriStateBoolean(entry.targetIsFriend),
+                type(entry.targetReaction) == "number" and entry.targetReaction or -1,
+                type(entry.interruptedBy) == "string" and entry.interruptedBy or "",
+                linkedLoc,
+                MapManualStopReason(entry.manualStopReason),
+                BuildProvenanceFlags(entry),
+            })
+        end
+    end
+
+    return {
+        captureVersion = 1,
+        timeUnit = "cs",
+        totals = totals,
+        bySpellID = bySpellID,
+    }
+end
+
+function PvPScalpel_IsLocalSpellCaptureActive()
+    return IsSpellCaptureSessionActive()
+end
+
+function PvPScalpel_StartLocalSpellCaptureSession()
+    ResetRuntimeCaptureState()
+    ResetSessionCollections()
+    local session = EnsureSessionCollections()
+    session.active = true
+    session.startedAt = GetDebugNow()
+    RefreshTargetSnapshot()
+    if PvPScalpel_Debug == true then
+        ShowDebugHistory()
+    end
+end
+
+function PvPScalpel_StopLocalSpellCaptureSession(match)
+    local session = EnsureSessionCollections()
+
+    if PvPScalpel_IsTable(match) then
+        local localLossOfControl, locRowIndexByEntry = SerializeLocalLossOfControl()
+        match.localLossOfControl = localLossOfControl
+        match.localSpellCapture = SerializeLocalSpellCapture(locRowIndexByEntry)
+    end
+
+    session.active = false
+    session.startedAt = nil
+    ResetRuntimeCaptureState()
+    ResetSessionCollections()
+
+    return match
+end
+
 local function OnSpellEvent(_, event, unit, ...)
-    PruneStaleCastEntries()
+    if event == "UNIT_TARGET" then
+        if unit == "player" then
+            RefreshTargetSnapshot()
+        end
+        return
+    end
 
     if event == "PLAYER_MOUNT_DISPLAY_CHANGED" or event == "PLAYER_CAN_GLIDE_CHANGED" or event == "PLAYER_IS_GLIDING_CHANGED" then
         RefreshRuntimeStateCache()
@@ -2341,17 +3667,33 @@ local function OnSpellEvent(_, event, unit, ...)
         return
     end
 
+    PruneStaleCastEntries()
+
     if event == "LOSS_OF_CONTROL_ADDED" then
+        if not IsSpellCaptureSessionActive() and PvPScalpel_Debug ~= true then
+            return
+        end
         HandleLossOfControlAdded(unit, ...)
         return
     end
 
     if event == "LOSS_OF_CONTROL_UPDATE" then
+        if not IsSpellCaptureSessionActive() and PvPScalpel_Debug ~= true then
+            return
+        end
         HandleLossOfControlUpdate(unit)
         return
     end
 
     if unit ~= "player" then
+        return
+    end
+
+    if not IsSpellCaptureSessionActive() and PvPScalpel_Debug ~= true then
+        return
+    end
+
+    if not IsSpellCaptureSessionActive() and not IsPlayerSpellcastLifecycleEvent(event) then
         return
     end
 
@@ -2405,12 +3747,16 @@ local function OnSpellEvent(_, event, unit, ...)
     end
 end
 
-local function RegisterDebugSpellEvents()
+RegisterDebugSpellEvents = function()
+    if spellTrackingRegistered then
+        return
+    end
     debugSpellFrame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
     debugSpellFrame:RegisterEvent("PLAYER_CAN_GLIDE_CHANGED")
     debugSpellFrame:RegisterEvent("PLAYER_IS_GLIDING_CHANGED")
     debugSpellFrame:RegisterEvent("PLAYER_STARTED_MOVING")
     debugSpellFrame:RegisterEvent("PLAYER_STOPPED_MOVING")
+    debugSpellFrame:RegisterUnitEvent("UNIT_TARGET", "player")
     debugSpellFrame:RegisterUnitEvent("LOSS_OF_CONTROL_ADDED", "player")
     debugSpellFrame:RegisterUnitEvent("LOSS_OF_CONTROL_UPDATE", "player")
     debugSpellFrame:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
@@ -2427,6 +3773,74 @@ local function RegisterDebugSpellEvents()
     debugSpellFrame:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTIBLE", "player")
     debugSpellFrame:RegisterUnitEvent("UNIT_SPELLCAST_NOT_INTERRUPTIBLE", "player")
     debugSpellFrame:SetScript("OnEvent", OnSpellEvent)
+
+    if LIVE_VISIBLE_UNIT_CC_ATTRIBUTION_ENABLED == true then
+        heuristicUnitFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+        heuristicUnitFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
+        heuristicUnitFrame:RegisterEvent("PLAYER_FOCUS_CHANGED")
+        heuristicUnitFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+        heuristicUnitFrame:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
+        heuristicUnitFrame:RegisterEvent("UNIT_AURA")
+        heuristicUnitFrame:SetScript("OnEvent", OnHeuristicUnitEvent)
+        RegisterStaticHeuristicLocWatchers()
+    end
+    spellTrackingRegistered = true
+end
+
+function PvPScalpel_EnableSpellTracking()
+    RegisterDebugSpellEvents()
+end
+
+function PvPScalpel_DisableSpellTracking()
+    if not spellTrackingRegistered then
+        return
+    end
+    debugSpellFrame:UnregisterAllEvents()
+    debugSpellFrame:SetScript("OnEvent", nil)
+    heuristicUnitFrame:UnregisterAllEvents()
+    heuristicUnitFrame:SetScript("OnEvent", nil)
+    UnregisterAllHeuristicLocWatchers()
+    spellTrackingRegistered = false
+end
+
+function PvPScalpel_EnableLocalSpellCaptureRuntime()
+    RegisterDebugSpellEvents()
+end
+
+function PvPScalpel_WipeDebugState()
+    local captureActive = IsSpellCaptureSessionActive()
+    local chatFrame = FindDebugChatFrame()
+    if chatFrame and chatFrame.Clear then
+        chatFrame:Clear()
+    end
+
+    ResetHeuristicRuntimeForWorld()
+    RefreshTargetSnapshot()
+
+    if not captureActive then
+        ResetRuntimeCaptureState()
+        ResetSessionCollections()
+    end
+
+    if PvPScalpel_Log then
+        if captureActive then
+            PvPScalpel_Log("Debug state wiped. Active match capture was preserved.")
+        else
+            PvPScalpel_Log("Debug state wiped.")
+        end
+    end
+end
+
+function PvPScalpel_DisableLocalSpellCaptureRuntime()
+    if not spellTrackingRegistered then
+        return
+    end
+    debugSpellFrame:UnregisterAllEvents()
+    debugSpellFrame:SetScript("OnEvent", nil)
+    heuristicUnitFrame:UnregisterAllEvents()
+    heuristicUnitFrame:SetScript("OnEvent", nil)
+    UnregisterAllHeuristicLocWatchers()
+    spellTrackingRegistered = false
 end
 
 debugInitFrame:RegisterEvent("PLAYER_LOGIN")
@@ -2435,15 +3849,13 @@ debugInitFrame:SetScript("OnEvent", function(_, event)
         return
     end
 
-    EnsureDebugHistoryStore()
-    NormalizeDebugHistory()
+    EnsureSessionCollections()
+    ResetHeuristicRuntimeForWorld()
     RefreshRuntimeStateCache()
     RefreshMovementStateCache()
-    TrimDebugHistory()
+    RefreshTargetSnapshot()
 
     if PvPScalpel_Debug ~= true then
         CloseDebugChatFrame()
     end
-
-    RegisterDebugSpellEvents()
 end)
