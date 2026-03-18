@@ -144,6 +144,19 @@ function PvPScalpel_GetLiveMatchDurationSeconds()
     return -1
 end
 
+function PvPScalpel_GetResolvedMatchDurationSeconds()
+    if type(lastMatchDuration) == "number" and lastMatchDuration >= 0 then
+        return lastMatchDuration
+    end
+
+    local liveDuration = PvPScalpel_GetLiveMatchDurationSeconds()
+    if type(liveDuration) == "number" and liveDuration >= 0 then
+        return liveDuration
+    end
+
+    return 0
+end
+
 local function PvPScalpel_ApplyMatchStartMetadata(matchDetails)
     if type(matchDetails) ~= "table" then
         return
@@ -385,6 +398,7 @@ function PvPScalpel_BeginMatchCapture(trigger)
     end
 
     PvPScalpel_ResetCaptureIntegrity()
+    lastMatchDuration = nil
     PvPScalpel_Log("PVP capture START (" .. tostring(trigger) .. ")")
     if PvPScalpel_RegisterRuntimeListeners then
         PvPScalpel_RegisterRuntimeListeners()
@@ -427,6 +441,7 @@ function PvPScalpel_AbortActiveCapture(reason)
     PvPScalpel_ResetSoloShuffleState()
     PvPScalpel_WaitingForGateOpen = false
     PvPScalpel_IsTracking = false
+    lastMatchDuration = nil
     PvPScalpel_ResetCaptureIntegrity()
     if PvPScalpel_ClearActiveMatchRecovery then
         PvPScalpel_ClearActiveMatchRecovery("abort_capture")
@@ -439,6 +454,7 @@ function PvPScalpel_FinalizeCaptureBuffer()
     end
     PvPScalpel_ResetMatchStartMetadata()
     PvPScalpel_IsTracking = false
+    lastMatchDuration = nil
     PvPScalpel_ResetCaptureIntegrity()
     if PvPScalpel_ClearActiveMatchRecovery then
         PvPScalpel_ClearActiveMatchRecovery("finalize_capture")
@@ -524,6 +540,7 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         matchKey = currentMatchKey,
         telemetryVersion = 4.0,
         winner = lastMatchWinner,
+        duration = PvPScalpel_GetResolvedMatchDurationSeconds(),
         matchDetails = {
             timestamp = now,
             mapName = mapName,
@@ -564,7 +581,7 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         timestamp = now,
         format = "Solo Shuffle",
         mapName = mapName,
-        duration = C_PvP.GetActiveMatchDuration and C_PvP.GetActiveMatchDuration() or 0,
+        duration = match.duration,
         roundsExpected = 6,
         roundsCaptured = roundsCaptured,
         rounds = soloShuffleState.rounds,
@@ -635,6 +652,7 @@ function PvPScalpel_TryCaptureMatch(attempt)
         matchKey = currentMatchKey,
         telemetryVersion = 4.0,
         winner = lastMatchWinner,
+        duration = PvPScalpel_GetResolvedMatchDurationSeconds(),
         matchDetails = {
             timestamp = now,
             mapName = mapName,

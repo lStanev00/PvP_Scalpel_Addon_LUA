@@ -237,24 +237,7 @@ local function PvPScalpel_RegisterUnitPopupMenuButton()
         return
     end
 
-    if not Menu or type(Menu.ModifyMenu) ~= "function" then
-        return
-    end
-
-    for _, menuTag in ipairs(PvPScalpel_UnitPopupTags) do
-        Menu.ModifyMenu(menuTag, function(owner, rootDescription, contextData)
-            local nameRealm = PvPScalpel_BuildCharacterNameRealm(contextData)
-            if not nameRealm then
-                return
-            end
-
-            rootDescription:CreateButton("Copy name-realm", function()
-                PvPScalpel_ShowUnitPopupUrlDialog(nameRealm)
-                PvPScalpel_ShowClipboardNotice("Press Ctrl+C to copy name-realm")
-            end)
-        end)
-    end
-
+    -- Disabled: secure unit popup name reads taint enemy-player menus in PvP lobbies.
     PvPScalpel_UnitPopupMenuRegistered = true
 end
 

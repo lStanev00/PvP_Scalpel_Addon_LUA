@@ -474,6 +474,11 @@ function PvPScalpel_HandlePvpMatchComplete(winner, duration)
     PvPScalpel_Log(string.format("PVP MATCH COMPLETE. Winner: %s | Duration: %s", tostring(winner), tostring(duration)))
 
     lastMatchWinner = nil
+    if type(duration) == "number" and duration >= 0 then
+        lastMatchDuration = duration
+    else
+        lastMatchDuration = nil
+    end
     local factionIndex = GetBattlefieldArenaFaction and GetBattlefieldArenaFaction() or nil
     if factionIndex ~= nil then
         local enemyFactionIndex = (factionIndex + 1) % 2

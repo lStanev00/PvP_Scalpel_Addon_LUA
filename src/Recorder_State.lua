@@ -8,6 +8,7 @@ castTargetSnapshotByGuid = {}
 currentCastRecords = nil
 castRecordByGuid = {}
 lastMatchWinner = nil
+lastMatchDuration = nil
 currentSpellTotals = nil
 currentSpellTotalsBySource = nil
 currentInterruptSpellsBySource = nil
