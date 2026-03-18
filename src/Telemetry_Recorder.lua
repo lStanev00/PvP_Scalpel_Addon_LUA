@@ -32,6 +32,9 @@ function PvPScalpel_StartTimeline()
     if PvPScalpel_StartLocalSpellCaptureSession then
         PvPScalpel_StartLocalSpellCaptureSession()
     end
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("capture_start")
+    end
 end
 
 function PvPScalpel_StopTimeline(match)
@@ -51,6 +54,12 @@ function PvPScalpel_StopTimeline(match)
 
     if PvPScalpel_StopLocalSpellCaptureSession then
         match = PvPScalpel_StopLocalSpellCaptureSession(match)
+    end
+    if PvPScalpel_BuildCaptureIntegrity then
+        local captureIntegrity = PvPScalpel_BuildCaptureIntegrity()
+        if PvPScalpel_IsTable(captureIntegrity) then
+            match.captureIntegrity = captureIntegrity
+        end
     end
 
     currentTimeline = nil
@@ -252,6 +261,9 @@ function PvPScalpel_MergeSpellTotalsBySource(sourceMap)
             end
         end
     end
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("spell_totals_merge")
+    end
 end
 
 function PvPScalpel_ReplaceSpellTotalsBySource(sourceMap)
@@ -294,6 +306,9 @@ function PvPScalpel_ReplaceSpellTotalsBySource(sourceMap)
     end
 
     currentSpellTotalsBySource = replaced
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("spell_totals_replace")
+    end
 end
 
 function PvPScalpel_MergeInterruptSpellsBySource(sourceMap)
@@ -316,6 +331,9 @@ function PvPScalpel_MergeInterruptSpellsBySource(sourceMap)
                 end
             end
         end
+    end
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("interrupt_spells_merge")
     end
 end
 
@@ -341,6 +359,9 @@ function PvPScalpel_ReplaceInterruptSpellsBySource(sourceMap)
     end
 
     currentInterruptSpellsBySource = replaced
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("interrupt_spells_replace")
+    end
 end
 
 function PvPScalpel_RecordCastOutcome(outcome)

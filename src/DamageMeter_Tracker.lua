@@ -164,6 +164,50 @@ function PvPScalpel_DamageMeterResetMatchBuffer()
     end
 end
 
+function PvPScalpel_DamageMeterExportRecoveryState()
+    return {
+        startSessionId = type(damageMeterStartSessionId) == "number" and damageMeterStartSessionId or 0,
+        collectionMode = damageMeterCollectionMode,
+        excludedSessionIds = PvPScalpel_DeepCopyPlainTable(damageMeterExcludedSessionIds or {}),
+        matchObservedSessions = PvPScalpel_DeepCopyPlainTable(damageMeterMatchObservedSessions or {}),
+        kickStatsBySource = PvPScalpel_DeepCopyPlainTable(damageMeterKickStatsBySource or {}),
+        lastSourceTotals = PvPScalpel_DeepCopyPlainTable(damageMeterLastSourceTotals or {}),
+        lastSpellTotals = PvPScalpel_DeepCopyPlainTable(damageMeterLastSpellTotals or {}),
+        lastTargetTotals = PvPScalpel_DeepCopyPlainTable(damageMeterLastTargetTotals or {}),
+    }
+end
+
+function PvPScalpel_DamageMeterRestoreRecoveryState(state)
+    if type(state) ~= "table" then
+        return false
+    end
+
+    damageMeterSessions = {}
+    damageMeterExcludedSessionIds = PvPScalpel_DeepCopyPlainTable(state.excludedSessionIds or {})
+    damageMeterKickStatsBySource = PvPScalpel_DeepCopyPlainTable(state.kickStatsBySource or {})
+    damageMeterMatchObservedSessions = PvPScalpel_DeepCopyPlainTable(state.matchObservedSessions or {})
+    damageMeterLastSourceTotals = PvPScalpel_DeepCopyPlainTable(state.lastSourceTotals or {})
+    damageMeterLastSpellTotals = PvPScalpel_DeepCopyPlainTable(state.lastSpellTotals or {})
+    damageMeterLastTargetTotals = PvPScalpel_DeepCopyPlainTable(state.lastTargetTotals or {})
+    damageMeterStartSessionId = type(state.startSessionId) == "number" and state.startSessionId or 0
+    damageMeterPending = false
+    damageMeterAttempts = 0
+
+    if state.collectionMode == DAMAGE_METER_COLLECTION_MODE.SESSION or state.collectionMode == DAMAGE_METER_COLLECTION_MODE.SNAPSHOT then
+        damageMeterCollectionMode = state.collectionMode
+    else
+        damageMeterCollectionMode = PvPScalpel_DamageMeterResolveCollectionMode()
+    end
+
+    PvPScalpel_DamageMeterStopUpdater()
+    if damageMeterRetryTicker then
+        damageMeterRetryTicker:Cancel()
+        damageMeterRetryTicker = nil
+    end
+
+    return true
+end
+
 local function PvPScalpel_DamageMeterStartUpdater()
     if damageMeterUpdaterTicker then
         return

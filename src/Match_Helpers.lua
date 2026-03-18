@@ -15,6 +15,77 @@ soloShuffleState = soloShuffleState or {
     saved = false,
 }
 
+function PvPScalpel_ResetCaptureIntegrity()
+    currentCaptureIntegrity = nil
+end
+
+function PvPScalpel_EnsureCaptureIntegrity()
+    if type(currentCaptureIntegrity) ~= "table" then
+        currentCaptureIntegrity = {
+            captureVersion = 1,
+            resumedAfterReload = false,
+            startedMidMatch = false,
+            checkpointRestored = false,
+            spellSessionRestored = false,
+            damageMeterRestored = false,
+            hasEventGap = false,
+            reloadRecoveryCount = 0,
+            notes = {},
+        }
+    end
+    if type(currentCaptureIntegrity.notes) ~= "table" then
+        currentCaptureIntegrity.notes = {}
+    end
+    if type(currentCaptureIntegrity.reloadRecoveryCount) ~= "number" then
+        currentCaptureIntegrity.reloadRecoveryCount = 0
+    end
+    return currentCaptureIntegrity
+end
+
+function PvPScalpel_MarkCaptureIntegrity(flagName, note)
+    local integrity = PvPScalpel_EnsureCaptureIntegrity()
+    if type(flagName) == "string" and flagName ~= "" then
+        integrity[flagName] = true
+    end
+    if type(note) == "string" and note ~= "" then
+        local notes = integrity.notes
+        for i = 1, #notes do
+            if notes[i] == note then
+                return integrity
+            end
+        end
+        table.insert(notes, note)
+        if type(soloShuffleState) == "table" and soloShuffleState.active == true and PvPScalpel_SoloShuffleNote then
+            PvPScalpel_SoloShuffleNote(note)
+        end
+    end
+    return integrity
+end
+
+function PvPScalpel_BuildCaptureIntegrity()
+    if type(currentCaptureIntegrity) ~= "table" then
+        return nil
+    end
+    local integrity = PvPScalpel_EnsureCaptureIntegrity()
+    local hasSignal = false
+    for key, value in pairs(integrity) do
+        if key ~= "captureVersion" and key ~= "notes" then
+            if type(value) == "boolean" and value == true then
+                hasSignal = true
+                break
+            end
+            if key == "reloadRecoveryCount" and type(value) == "number" and value > 0 then
+                hasSignal = true
+                break
+            end
+        end
+    end
+    if hasSignal ~= true and #integrity.notes == 0 then
+        return nil
+    end
+    return PvPScalpel_DeepCopyPlainTable(integrity)
+end
+
 function PvPScalpel_IsRatedSoloShuffle()
     return C_PvP and C_PvP.IsRatedSoloShuffle and C_PvP.IsRatedSoloShuffle()
 end
@@ -58,6 +129,21 @@ local function PvPScalpel_CaptureMatchStartMetadata()
     end
 end
 
+function PvPScalpel_GetCurrentBgGameType()
+    PvPScalpel_CaptureMatchStartMetadata()
+    return currentBgGameType
+end
+
+function PvPScalpel_GetLiveMatchDurationSeconds()
+    if C_PvP and C_PvP.GetActiveMatchDuration then
+        local ok, duration = pcall(C_PvP.GetActiveMatchDuration)
+        if ok and type(duration) == "number" and duration >= 0 then
+            return duration
+        end
+    end
+    return -1
+end
+
 local function PvPScalpel_ApplyMatchStartMetadata(matchDetails)
     if type(matchDetails) ~= "table" then
         return
@@ -89,6 +175,9 @@ end
 function PvPScalpel_StartSoloShuffleSession()
     PvPScalpel_ResetSoloShuffleState()
     soloShuffleState.active = true
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("solo_shuffle_session_start")
+    end
 end
 
 function PvPScalpel_StartSoloShuffleRound()
@@ -115,6 +204,9 @@ function PvPScalpel_StartSoloShuffleRound()
     end
     table.insert(soloShuffleState.rounds, round)
     PvPScalpel_Log(("Solo Shuffle: Round %d start"):format(soloShuffleState.currentRoundIndex))
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("solo_shuffle_round_start")
+    end
 end
 
 function PvPScalpel_PrepareScoreboardRead()
@@ -230,6 +322,9 @@ function PvPScalpel_EndSoloShuffleRound()
     soloShuffleState.currentRoundStart = nil
     soloShuffleState.currentRoundCastByGuid = nil
     PvPScalpel_Log(("Solo Shuffle: Round %d end (%.1fs)"):format(round.roundIndex, round.duration or 0))
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("solo_shuffle_round_end")
+    end
 end
 
 function PvPScalpel_HandleSoloShuffleStateChange()
@@ -259,6 +354,9 @@ function PvPScalpel_HandleSoloShuffleStateChange()
     else
         PvPScalpel_SoloShuffleNote("enum_pvp_match_state_unavailable")
     end
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("solo_shuffle_state_change")
+    end
 end
 
 function PvPScalpel_IsLiveMatchStarted()
@@ -286,6 +384,7 @@ function PvPScalpel_BeginMatchCapture(trigger)
         return
     end
 
+    PvPScalpel_ResetCaptureIntegrity()
     PvPScalpel_Log("PVP capture START (" .. tostring(trigger) .. ")")
     if PvPScalpel_RegisterRuntimeListeners then
         PvPScalpel_RegisterRuntimeListeners()
@@ -299,6 +398,9 @@ function PvPScalpel_BeginMatchCapture(trigger)
         PvPScalpel_DamageMeterMarkStart()
     end
     PvPScalpel_Log("Local spell capture STARTED after gates opened.")
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("capture_begin")
+    end
 end
 
 function PvPScalpel_AbortActiveCapture(reason)
@@ -325,6 +427,10 @@ function PvPScalpel_AbortActiveCapture(reason)
     PvPScalpel_ResetSoloShuffleState()
     PvPScalpel_WaitingForGateOpen = false
     PvPScalpel_IsTracking = false
+    PvPScalpel_ResetCaptureIntegrity()
+    if PvPScalpel_ClearActiveMatchRecovery then
+        PvPScalpel_ClearActiveMatchRecovery("abort_capture")
+    end
 end
 
 function PvPScalpel_FinalizeCaptureBuffer()
@@ -333,6 +439,10 @@ function PvPScalpel_FinalizeCaptureBuffer()
     end
     PvPScalpel_ResetMatchStartMetadata()
     PvPScalpel_IsTracking = false
+    PvPScalpel_ResetCaptureIntegrity()
+    if PvPScalpel_ClearActiveMatchRecovery then
+        PvPScalpel_ClearActiveMatchRecovery("finalize_capture")
+    end
 end
 
 function PvPScalpel_BuildSoloShufflePlayers()

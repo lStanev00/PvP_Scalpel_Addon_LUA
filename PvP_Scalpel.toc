@@ -4,7 +4,7 @@
 ## Notes: Tracks PvP match results
 ## Author: Lachezar Stanev
 ## SavedVariables: PvP_Scalpel_DB, PvP_Scalpel_GC, PvP_Scalpel_InteruptSpells
-## SavedVariablesPerCharacter: PvP_Scalpel_SpellFilterCache
+## SavedVariablesPerCharacter: PvP_Scalpel_SpellFilterCache, PvP_Scalpel_ActiveMatchRecovery
 ## LoadOnDemand: 0
 ## DefaultState: Enabled
 

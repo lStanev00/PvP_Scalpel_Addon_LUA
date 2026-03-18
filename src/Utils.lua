@@ -55,6 +55,31 @@ function PvPScalpel_KebabToPascal(str)
               end)
 end
 
+function PvPScalpel_DeepCopyPlainTable(value, seen)
+    if type(value) ~= "table" then
+        return value
+    end
+
+    if type(seen) ~= "table" then
+        seen = {}
+    elseif seen[value] ~= nil then
+        return seen[value]
+    end
+
+    local copied = {}
+    seen[value] = copied
+
+    for key, entry in pairs(value) do
+        local copiedKey = key
+        if type(key) == "table" then
+            copiedKey = PvPScalpel_DeepCopyPlainTable(key, seen)
+        end
+        copied[copiedKey] = PvPScalpel_DeepCopyPlainTable(entry, seen)
+    end
+
+    return copied
+end
+
 -- Debug logging (safe: avoids printing during combat lock / restriction windows).
 if PvPScalpel_Debug == nil then
     -- Production default: keep chat quiet unless the user explicitly enables debug via /pvpsdebug.
@@ -110,6 +135,20 @@ function PvPScalpel_Log(msg)
         return
     end
 
+    if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+        DEFAULT_CHAT_FRAME:AddMessage(prefix .. message)
+    else
+        print(prefix .. message)
+    end
+end
+
+function PvPScalpel_NotifyUser(msg)
+    local message = msg
+    if type(message) ~= "string" then
+        message = tostring(message)
+    end
+
+    local prefix = "|cff00ff98[PvP Scalpel]|r "
     if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
         DEFAULT_CHAT_FRAME:AddMessage(prefix .. message)
     else

@@ -26,6 +26,7 @@ local RemoveCastEntry
 local AppendLocToChat
 local SafeGetSchoolString
 local IsSpellCaptureSessionActive
+local GetSpellCaptureSessionStart
 local PruneResolvedHeuristicEvents
 local RegisterDebugSpellEvents
 
@@ -239,6 +240,9 @@ end
 
 local function PushDebugHistory(entry)
     table.insert(EnsureKeptHistory(), entry)
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint and IsSpellCaptureSessionActive() then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("kept_history_append")
+    end
 end
 
 local function PushFilteredDebugHistory(_entry)
@@ -246,6 +250,9 @@ end
 
 local function PushLocDebugHistory(entry)
     table.insert(EnsureLocHistory(), entry)
+    if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint and IsSpellCaptureSessionActive() then
+        PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("loc_history_append")
+    end
 end
 
 local function NormalizeDebugHistory()
@@ -260,7 +267,111 @@ IsSpellCaptureSessionActive = function()
     return type(activeSpellCaptureSession) == "table" and activeSpellCaptureSession.active == true
 end
 
-local function GetSpellCaptureSessionStart()
+function PvPScalpel_GetLocalSpellCaptureElapsedSeconds()
+    if not IsSpellCaptureSessionActive() then
+        return nil
+    end
+
+    local sessionStart = GetSpellCaptureSessionStart()
+    local now = GetDebugNow()
+    if type(sessionStart) ~= "number" or type(now) ~= "number" then
+        return nil
+    end
+
+    return math.max(0, now - sessionStart)
+end
+
+function PvPScalpel_ExportLocalSpellCaptureRecoveryState()
+    if not IsSpellCaptureSessionActive() then
+        return nil
+    end
+
+    local session = EnsureSessionCollections()
+    local groupedHistory = EnsureKeptHistory()
+    local locHistory = EnsureLocHistory()
+    local locIndexByEntry = {}
+    local exportedLocHistory = {}
+    local exportedGroupedHistory = {}
+    local unresolvedCastCount = 0
+
+    for i = 1, #locHistory do
+        local entry = locHistory[i]
+        if type(entry) == "table" then
+            locIndexByEntry[entry] = i
+            exportedLocHistory[i] = PvPScalpel_DeepCopyPlainTable(entry)
+        end
+    end
+
+    for i = 1, #groupedHistory do
+        local entry = groupedHistory[i]
+        if type(entry) == "table" then
+            local copied = PvPScalpel_DeepCopyPlainTable(entry)
+            copied.linkedLocIndex = type(entry._linkedLocEntry) == "table" and (locIndexByEntry[entry._linkedLocEntry] or 0) or 0
+            copied._linkedLocEntry = nil
+            exportedGroupedHistory[i] = copied
+        end
+    end
+
+    for _ in pairs(debugCastByGuid) do
+        unresolvedCastCount = unresolvedCastCount + 1
+    end
+
+    return {
+        castKeyCounter = type(session.castKeyCounter) == "number" and session.castKeyCounter or 0,
+        keptHistory = exportedGroupedHistory,
+        locHistory = exportedLocHistory,
+        unresolvedCastCount = unresolvedCastCount,
+        elapsedCaptureSeconds = PvPScalpel_GetLocalSpellCaptureElapsedSeconds() or -1,
+    }
+end
+
+function PvPScalpel_RestoreLocalSpellCaptureSession(snapshot, elapsedCaptureSeconds)
+    if type(snapshot) ~= "table" then
+        return false
+    end
+
+    ResetRuntimeCaptureState()
+    ResetSessionCollections()
+
+    local session = EnsureSessionCollections()
+    session.active = true
+    if type(elapsedCaptureSeconds) == "number" and elapsedCaptureSeconds >= 0 then
+        session.startedAt = GetDebugNow() - elapsedCaptureSeconds
+    else
+        session.startedAt = GetDebugNow()
+    end
+    session.castKeyCounter = type(snapshot.castKeyCounter) == "number" and snapshot.castKeyCounter or 0
+    session.groupedHistory = {}
+    session.locHistory = {}
+
+    local locHistory = snapshot.locHistory or {}
+    for i = 1, #locHistory do
+        local entry = locHistory[i]
+        if type(entry) == "table" then
+            session.locHistory[i] = PvPScalpel_DeepCopyPlainTable(entry)
+        end
+    end
+
+    local groupedHistory = snapshot.keptHistory or {}
+    for i = 1, #groupedHistory do
+        local entry = groupedHistory[i]
+        if type(entry) == "table" then
+            local copied = PvPScalpel_DeepCopyPlainTable(entry)
+            local linkedLocIndex = type(copied.linkedLocIndex) == "number" and copied.linkedLocIndex or 0
+            copied.linkedLocIndex = nil
+            copied._linkedLocEntry = linkedLocIndex > 0 and session.locHistory[linkedLocIndex] or nil
+            session.groupedHistory[i] = copied
+        end
+    end
+
+    RefreshTargetSnapshot()
+    if PvPScalpel_Debug == true then
+        ShowDebugHistory()
+    end
+    return true
+end
+
+GetSpellCaptureSessionStart = function()
     local session = EnsureSessionCollections()
     if type(session.startedAt) == "number" then
         return session.startedAt
