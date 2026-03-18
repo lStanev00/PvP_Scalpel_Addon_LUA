@@ -743,6 +743,9 @@ function PvPScalpel_TryCaptureMatch(attempt)
         end
         PvPScalpel_LastSavedMatchTime = now
         PvPScalpel_Log("PvP Scalpel: Match saved (" .. #match.players .. " players)")
+        if PvPScalpel_BlitzMmrHeaderHandleMatchSaved then
+            PvPScalpel_BlitzMmrHeaderHandleMatchSaved(match)
+        end
     end
 
     PvPScalpel_FinalizeCaptureBuffer()
