@@ -27,6 +27,9 @@ local AppendLocToChat
 local SafeGetSchoolString
 local IsSpellCaptureSessionActive
 local GetSpellCaptureSessionStart
+local ResetRuntimeCaptureState
+local RefreshTargetSnapshot
+local ShowDebugHistory
 local PruneResolvedHeuristicEvents
 local RegisterDebugSpellEvents
 
@@ -445,7 +448,7 @@ local function BuildTargetSnapshot()
     }
 end
 
-local function RefreshTargetSnapshot()
+RefreshTargetSnapshot = function()
     targetSnapshotCache = BuildTargetSnapshot()
 end
 
@@ -813,8 +816,10 @@ local function PrepareDebugChatFrame(chatFrame)
     if chatFrame.RemoveAllChannels then
         chatFrame:RemoveAllChannels()
     end
-    if chatFrame.ReceiveAllPrivateMessages then
-        chatFrame:ReceiveAllPrivateMessages()
+    if chatFrame.AddPrivateMessageTarget then
+        -- Keep the debug tab out of Blizzard's live whisper routing/history path.
+        -- A dummy target creates a private-message filter that will never match real whispers.
+        chatFrame:AddPrivateMessageTarget("__pvps_debug__")
     end
 
     local chatTab = _G[chatFrame:GetName() .. "Tab"]
@@ -1266,7 +1271,7 @@ local function ReplayDebugHistory(chatFrame)
     end
 end
 
-local function ShowDebugHistory()
+ShowDebugHistory = function()
     local chatFrame = OpenDebugChatFrame()
     if not chatFrame then
         return
@@ -3451,7 +3456,7 @@ local function OnHeuristicUnitEvent(_, event, ...)
     end
 end
 
-local function ResetRuntimeCaptureState()
+ResetRuntimeCaptureState = function()
     debugCastByGuid = {}
     resolvedCastByGuid = {}
     recentResolvedCastHistory = {}

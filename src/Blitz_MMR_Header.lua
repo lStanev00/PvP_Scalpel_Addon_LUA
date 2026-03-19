@@ -1,6 +1,9 @@
 local BLITZ_LINGER_SECONDS = 30
 local BLITZ_ACCEPT_WINDOW_RESYNC_SECONDS = 0.5
 local BLITZ_QUEUE_RESOLUTION_GRACE_SECONDS = 1.75
+local BLITZ_RATED_BRACKET_INDEX = 9
+
+PvP_Scalpel_BlitzMmrCache = PvP_Scalpel_BlitzMmrCache or {}
 
 local blitzMmrHeaderFrame = CreateFrame("Frame", "PvPScalpelBlitzMmrHeader", UIParent)
 blitzMmrHeaderFrame:SetFrameStrata("HIGH")
@@ -310,6 +313,14 @@ local function PvPScalpel_GetLocalPlayerIdentity()
     }
 end
 
+local function PvPScalpel_EnsureBlitzMmrCache()
+    if type(PvP_Scalpel_BlitzMmrCache) ~= "table" then
+        PvP_Scalpel_BlitzMmrCache = {}
+    end
+
+    return PvP_Scalpel_BlitzMmrCache
+end
+
 local function PvPScalpel_GetMostRecentBlitzMatch()
     if type(PvP_Scalpel_DB) ~= "table" then
         return nil
@@ -402,6 +413,72 @@ local function PvPScalpel_BuildBlitzMmrSummary(match)
         delta = delta,
         hasValidDelta = hasValidDelta,
     }
+end
+
+local function PvPScalpel_GetBlitzBracketRating()
+    if type(GetPersonalRatedInfo) ~= "function" then
+        return nil
+    end
+
+    local okRating, rating = pcall(GetPersonalRatedInfo, BLITZ_RATED_BRACKET_INDEX)
+    if okRating and type(rating) == "number" and rating >= 0 then
+        return rating
+    end
+
+    return nil
+end
+
+local function PvPScalpel_GetBlitzHeaderSummary()
+    local cache = PvPScalpel_EnsureBlitzMmrCache()
+    local cachedPostmatchMMR = cache.postmatchMMR
+    if PvPScalpel_IsPositiveNumber(cachedPostmatchMMR) then
+        local hasValidDelta = type(cache.prematchMMR) == "number"
+        return {
+            currentMMR = cachedPostmatchMMR,
+            delta = hasValidDelta and (cachedPostmatchMMR - cache.prematchMMR) or nil,
+            hasValidDelta = hasValidDelta,
+            suffixText = "MMR",
+        }
+    end
+
+    local bracketRating = PvPScalpel_GetBlitzBracketRating()
+    if type(bracketRating) == "number" then
+        return {
+            currentMMR = bracketRating,
+            delta = nil,
+            hasValidDelta = false,
+            suffixText = "RATING",
+        }
+    end
+
+    return {
+        currentMMR = 0,
+        delta = nil,
+        hasValidDelta = false,
+        suffixText = "RATING",
+    }
+end
+
+local function PvPScalpel_UpdateBlitzMmrCacheFromMatch(match)
+    if type(match) ~= "table" then
+        return false
+    end
+
+    local details = match.matchDetails
+    if type(details) ~= "table" or details.format ~= "Battleground Blitz" then
+        return false
+    end
+
+    local identity = PvPScalpel_GetLocalPlayerIdentity()
+    local ownerEntry = PvPScalpel_FindOwnerPlayerEntry(match.players, identity)
+    if type(ownerEntry) ~= "table" then
+        return false
+    end
+
+    local cache = PvPScalpel_EnsureBlitzMmrCache()
+    cache.prematchMMR = type(ownerEntry.prematchMMR) == "number" and ownerEntry.prematchMMR or nil
+    cache.postmatchMMR = type(ownerEntry.postmatchMMR) == "number" and ownerEntry.postmatchMMR or nil
+    return true
 end
 
 local function PvPScalpel_GetQueuedBlitzInfo()
@@ -565,7 +642,7 @@ local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
 
     blitzMmrHeaderLabel:SetText("BATTLEGROUND BLITZ")
     blitzMmrHeaderValue:SetText(PvPScalpel_FormatMmrValue(summary.currentMMR))
-    blitzMmrHeaderSuffix:SetText("MMR")
+    blitzMmrHeaderSuffix:SetText(type(summary.suffixText) == "string" and summary.suffixText or "MMR")
 
     if summary.hasValidDelta == true and type(summary.delta) == "number" then
         local deltaValue = math.floor(summary.delta + 0.5)
@@ -671,12 +748,7 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
     end
 
     -- check
-    local latestBlitzSummary = PvPScalpel_BuildBlitzMmrSummary(PvPScalpel_GetMostRecentBlitzMatch())
-    if type(latestBlitzSummary) ~= "table" then
-        PvPScalpel_ResetBlitzHeaderRuntimeState()
-        PvPScalpel_ClearBlitzHeaderVisuals()
-        return
-    end
+    local latestBlitzSummary = PvPScalpel_GetBlitzHeaderSummary()
 
     local queuedForBlitz, queueState, queueStartedAt, queueElapsedSeconds, queueIndex = PvPScalpel_GetQueuedBlitzInfo()
     local previouslyHadQueue = blitzMmrHeaderHasActiveQueue == true
@@ -847,6 +919,7 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
 end
 
 function PvPScalpel_BlitzMmrHeaderHandleMatchSaved(match)
+    PvPScalpel_UpdateBlitzMmrCacheFromMatch(match)
     PvPScalpel_BlitzMmrHeaderRefresh()
 end
 
