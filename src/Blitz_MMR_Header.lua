@@ -1,5 +1,6 @@
 local BLITZ_LINGER_SECONDS = 30
 local BLITZ_ACCEPT_WINDOW_RESYNC_SECONDS = 0.5
+local BLITZ_QUEUE_RESOLUTION_GRACE_SECONDS = 1.75
 
 local blitzMmrHeaderFrame = CreateFrame("Frame", "PvPScalpelBlitzMmrHeader", UIParent)
 blitzMmrHeaderFrame:SetFrameStrata("HIGH")
@@ -107,6 +108,9 @@ local blitzMmrHeaderLatestReadyCheckInfo = nil
 local blitzMmrHeaderAcceptWindowStartRemainingSeconds = nil
 local blitzMmrHeaderAcceptWindowExpiresAt = nil
 local blitzMmrHeaderAcceptWindowLastSyncAt = nil
+local blitzMmrHeaderPendingQueueResolution = false
+local blitzMmrHeaderPendingQueueResolutionStartedAt = nil
+local blitzMmrHeaderPendingQueueResolutionFromState = nil
 
 local function PvPScalpel_IsPositiveNumber(value)
     return type(value) == "number" and value > 0
@@ -147,6 +151,10 @@ end
 
 local function PvPScalpel_FormatAcceptTimerInline(seconds)
     return PvPScalpel_FormatAcceptTimer(seconds) .. " TO ACCEPT"
+end
+
+local function PvPScalpel_FormatEnterTimerInline(seconds)
+    return PvPScalpel_FormatAcceptTimer(seconds) .. " TO ENTER"
 end
 
 local function PvPScalpel_SetBlitzHeaderStatus(text, red, green, blue, backgroundRed, backgroundGreen, backgroundBlue, backgroundAlpha)
@@ -200,6 +208,12 @@ local function PvPScalpel_ClearBlitzHeaderLingerState()
     blitzMmrHeaderLingerReason = nil
 end
 
+local function PvPScalpel_ClearBlitzPendingQueueResolution()
+    blitzMmrHeaderPendingQueueResolution = false
+    blitzMmrHeaderPendingQueueResolutionStartedAt = nil
+    blitzMmrHeaderPendingQueueResolutionFromState = nil
+end
+
 local function PvPScalpel_ClearBlitzAcceptWindowState()
     blitzMmrHeaderAcceptWindowStartRemainingSeconds = nil
     blitzMmrHeaderAcceptWindowExpiresAt = nil
@@ -210,6 +224,7 @@ end
 
 local function PvPScalpel_ResetBlitzHeaderRuntimeState()
     PvPScalpel_ClearBlitzHeaderLingerState()
+    PvPScalpel_ClearBlitzPendingQueueResolution()
     PvPScalpel_ClearBlitzAcceptWindowState()
     blitzMmrHeaderQueueIndex = nil
     blitzMmrHeaderQueueStartedAt = nil
@@ -224,6 +239,7 @@ end
 
 local function PvPScalpel_BeginBlitzHeaderQueueCycle(queueIndex)
     PvPScalpel_ClearBlitzHeaderLingerState()
+    PvPScalpel_ClearBlitzPendingQueueResolution()
     PvPScalpel_ClearBlitzAcceptWindowState()
     blitzMmrHeaderQueueIndex = queueIndex
     blitzMmrHeaderQueueStartedAt = nil
@@ -264,12 +280,20 @@ local function PvPScalpel_GetBlitzHeaderLingerStatusText()
         return nil
     end
 
-    local baseText = string.upper(blitzMmrHeaderLingerReason)
-    if blitzMmrHeaderPopCount >= 1 then
-        return baseText .. " (" .. tostring(blitzMmrHeaderPopCount) .. ")"
+    return string.upper(blitzMmrHeaderLingerReason)
+end
+
+local function PvPScalpel_StartBlitzPendingQueueResolution(fromState)
+    if fromState ~= "accepted" and fromState ~= "confirm" and fromState ~= "queued" then
+        return
     end
 
-    return baseText
+    blitzMmrHeaderPendingQueueResolution = true
+    blitzMmrHeaderPendingQueueResolutionStartedAt = GetTime()
+    blitzMmrHeaderPendingQueueResolutionFromState = fromState
+    blitzMmrHeaderHasActiveQueue = false
+    blitzMmrHeaderAcceptedPopupVisible = false
+    blitzMmrHeaderQueueState = fromState
 end
 
 local function PvPScalpel_GetLocalPlayerIdentity()
@@ -470,6 +494,13 @@ local function PvPScalpel_GetBlitzInviteProgress()
 end
 
 local function PvPScalpel_IsLivePvpMatchActiveForHeader()
+    if type(IsInInstance) == "function" then
+        local okInstance, isInstance, instanceType = pcall(IsInInstance)
+        if okInstance and isInstance == true and (instanceType == "pvp" or instanceType == "arena") then
+            return true
+        end
+    end
+
     if C_PvP and C_PvP.GetActiveMatchState and Enum and Enum.PvPMatchState and Enum.PvPMatchState.Engaged then
         local okState, state = pcall(C_PvP.GetActiveMatchState)
         if okState and type(state) == "number" then
@@ -520,8 +551,13 @@ end
 local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
     local lingering = PvPScalpel_IsBlitzHeaderLingering()
     local accepted = blitzMmrHeaderAcceptedPopupVisible == true
+        or (blitzMmrHeaderPendingQueueResolution == true and blitzMmrHeaderQueueState == "accepted")
     local popped = blitzMmrHeaderQueueState == "confirm"
-    local displayActive = lingering or accepted or popped or blitzMmrHeaderHasActiveQueue == true
+    local displayActive = lingering
+        or accepted
+        or popped
+        or blitzMmrHeaderHasActiveQueue == true
+        or blitzMmrHeaderPendingQueueResolution == true
     if type(summary) ~= "table" or not displayActive then
         PvPScalpel_ClearBlitzHeaderVisuals()
         return
@@ -593,9 +629,17 @@ local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
         end
 
         if type(remainingSeconds) == "number" then
-            blitzMmrHeaderTimer:SetText(PvPScalpel_FormatAcceptTimerInline(remainingSeconds))
+            if accepted then
+                blitzMmrHeaderTimer:SetText(PvPScalpel_FormatEnterTimerInline(remainingSeconds))
+            else
+                blitzMmrHeaderTimer:SetText(PvPScalpel_FormatAcceptTimerInline(remainingSeconds))
+            end
         else
-            blitzMmrHeaderTimer:SetText(PvPScalpel_FormatAcceptTimerInline(0))
+            if accepted then
+                blitzMmrHeaderTimer:SetText(PvPScalpel_FormatEnterTimerInline(0))
+            else
+                blitzMmrHeaderTimer:SetText(PvPScalpel_FormatAcceptTimerInline(0))
+            end
         end
 
         blitzMmrHeaderHint:Hide()
@@ -626,6 +670,7 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
         return
     end
 
+    -- check
     local latestBlitzSummary = PvPScalpel_BuildBlitzMmrSummary(PvPScalpel_GetMostRecentBlitzMatch())
     if type(latestBlitzSummary) ~= "table" then
         PvPScalpel_ResetBlitzHeaderRuntimeState()
@@ -638,10 +683,16 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
     local previousQueueState = blitzMmrHeaderQueueState
     local previousQueueIndex = blitzMmrHeaderQueueIndex
     local queueWasReady = previousQueueState == "accepted" or previousQueueState == "confirm" or blitzMmrHeaderAwaitingPopResolution == true
+    local pendingResolution = blitzMmrHeaderPendingQueueResolution == true
+    local pendingFromState = blitzMmrHeaderPendingQueueResolutionFromState
+    local pendingGraceExpired = pendingResolution
+        and type(blitzMmrHeaderPendingQueueResolutionStartedAt) == "number"
+        and (GetTime() - blitzMmrHeaderPendingQueueResolutionStartedAt) >= BLITZ_QUEUE_RESOLUTION_GRACE_SECONDS
 
     if blitzMmrHeaderAcceptedPopupVisible == true then
         blitzMmrHeaderHasActiveQueue = true
         blitzMmrHeaderQueueState = "accepted"
+        PvPScalpel_ClearBlitzPendingQueueResolution()
         if type(queueIndex) == "number" then
             if not previouslyHadQueue or (type(previousQueueIndex) == "number" and previousQueueIndex ~= queueIndex) then
                 PvPScalpel_BeginBlitzHeaderQueueCycle(queueIndex)
@@ -681,7 +732,8 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
     end
 
     if queuedForBlitz then
-        local freshQueueCycle = (not previouslyHadQueue) or (type(previousQueueIndex) == "number" and previousQueueIndex ~= queueIndex)
+        local freshQueueCycle = ((not previouslyHadQueue) and pendingResolution ~= true)
+            or ((type(previousQueueIndex) == "number" and previousQueueIndex ~= queueIndex) and pendingResolution ~= true)
         if freshQueueCycle then
             PvPScalpel_BeginBlitzHeaderQueueCycle(queueIndex)
             previousQueueState = "hidden"
@@ -692,17 +744,21 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
             PvPScalpel_ClearBlitzHeaderLingerState()
         end
 
-        if queueWasReady and queueState == "queued" then
+        if (queueWasReady or pendingFromState == "accepted" or pendingFromState == "confirm") and queueState == "queued" then
             blitzMmrHeaderRequeueCount = blitzMmrHeaderRequeueCount + 1
             blitzMmrHeaderAwaitingPopResolution = false
             blitzMmrHeaderAcceptWindowStartRemainingSeconds = nil
             blitzMmrHeaderAcceptWindowExpiresAt = nil
             blitzMmrHeaderAcceptWindowLastSyncAt = nil
+            PvPScalpel_ClearBlitzPendingQueueResolution()
+        elseif pendingResolution and queueState == "confirm" then
+            PvPScalpel_ClearBlitzPendingQueueResolution()
         elseif previousQueueState ~= "confirm" and previousQueueState ~= "accepted"
             and queueState == "confirm" and blitzMmrHeaderAwaitingPopResolution ~= true
         then
             blitzMmrHeaderPopCount = blitzMmrHeaderPopCount + 1
             blitzMmrHeaderAwaitingPopResolution = true
+            PvPScalpel_ClearBlitzPendingQueueResolution()
         end
 
         local effectiveElapsedSeconds = nil
@@ -743,13 +799,34 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
         return
     end
 
-    if previouslyHadQueue then
-        if queueWasReady then
-            PvPScalpel_StartBlitzHeaderLinger("dodged")
-        else
-            PvPScalpel_StartBlitzHeaderLinger("canceled")
-        end
+    if previouslyHadQueue and pendingResolution ~= true then
+        PvPScalpel_StartBlitzPendingQueueResolution(previousQueueState)
         PvPScalpel_UpdateBlitzMmrHeaderDisplay(latestBlitzSummary)
+        return
+    end
+
+    if pendingResolution then
+        if not pendingGraceExpired then
+            PvPScalpel_UpdateBlitzMmrHeaderDisplay(latestBlitzSummary)
+            return
+        end
+
+        if pendingFromState == "queued" then
+            PvPScalpel_ClearBlitzPendingQueueResolution()
+            PvPScalpel_StartBlitzHeaderLinger("canceled")
+            PvPScalpel_UpdateBlitzMmrHeaderDisplay(latestBlitzSummary)
+            return
+        end
+
+        if pendingFromState == "confirm" then
+            PvPScalpel_ClearBlitzPendingQueueResolution()
+            PvPScalpel_StartBlitzHeaderLinger("dodged")
+            PvPScalpel_UpdateBlitzMmrHeaderDisplay(latestBlitzSummary)
+            return
+        end
+
+        PvPScalpel_ResetBlitzHeaderRuntimeState()
+        PvPScalpel_ClearBlitzHeaderVisuals()
         return
     end
 
@@ -858,12 +935,25 @@ blitzMmrHeaderFrame:SetScript("OnUpdate", function(_, elapsed)
         return
     end
 
+    if blitzMmrHeaderPendingQueueResolution == true then
+        PvPScalpel_BlitzMmrHeaderRefresh()
+        return
+    end
+
     if inviteStateActive then
         local remainingSeconds, progress = PvPScalpel_GetBlitzInviteProgress()
         if type(remainingSeconds) == "number" then
-            blitzMmrHeaderTimer:SetText(PvPScalpel_FormatAcceptTimerInline(remainingSeconds))
+            if blitzMmrHeaderAcceptedPopupVisible == true then
+                blitzMmrHeaderTimer:SetText(PvPScalpel_FormatEnterTimerInline(remainingSeconds))
+            else
+                blitzMmrHeaderTimer:SetText(PvPScalpel_FormatAcceptTimerInline(remainingSeconds))
+            end
         else
-            blitzMmrHeaderTimer:SetText(PvPScalpel_FormatAcceptTimerInline(0))
+            if blitzMmrHeaderAcceptedPopupVisible == true then
+                blitzMmrHeaderTimer:SetText(PvPScalpel_FormatEnterTimerInline(0))
+            else
+                blitzMmrHeaderTimer:SetText(PvPScalpel_FormatAcceptTimerInline(0))
+            end
         end
 
         if blitzMmrHeaderAcceptedPopupVisible == true then
