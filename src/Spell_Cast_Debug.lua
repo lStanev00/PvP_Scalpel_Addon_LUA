@@ -57,6 +57,70 @@ local movementStateCache = {
     lastStoppedMovingAt = nil,
 }
 
+function PvPScalpel_EnsureSpellDebugSessionStore()
+    local store = PvPScalpel_EnsureCurrentMatchSessionStore()
+    if type(store.debugCastByGuid) ~= "table" then
+        store.debugCastByGuid = {}
+    end
+    if type(store.resolvedCastByGuid) ~= "table" then
+        store.resolvedCastByGuid = {}
+    end
+    if type(store.recentResolvedCastHistory) ~= "table" then
+        store.recentResolvedCastHistory = {}
+    end
+    if type(store.recentLocHistory) ~= "table" then
+        store.recentLocHistory = {}
+    end
+    if type(store.activeLocByKey) ~= "table" then
+        store.activeLocByKey = {}
+    end
+    if type(store.runtimeStateCache) ~= "table" then
+        store.runtimeStateCache = {
+            isMounted = nil,
+            isFlying = nil,
+            isAdvancedFlyableArea = nil,
+            isFlyableArea = nil,
+            isGliding = nil,
+            canGlide = nil,
+        }
+    end
+    if type(store.movementStateCache) ~= "table" then
+        store.movementStateCache = {
+            isMoving = nil,
+            lastStartedMovingAt = nil,
+            lastStoppedMovingAt = nil,
+        }
+    end
+    return store
+end
+
+function PvPScalpel_BindSpellDebugRuntimeToCurrentMatchSession()
+    local store = PvPScalpel_EnsureSpellDebugSessionStore()
+    debugCastByGuid = store.debugCastByGuid
+    resolvedCastByGuid = store.resolvedCastByGuid
+    recentResolvedCastHistory = store.recentResolvedCastHistory
+    recentLocHistory = store.recentLocHistory
+    activeLocByKey = store.activeLocByKey
+    activeCastGuid = store.activeCastGuid
+    targetSnapshotCache = store.targetSnapshotCache
+    activeSpellCaptureSession = store.activeSpellCaptureSession
+    heuristicRuntimeState = store.heuristicRuntimeState
+    runtimeStateCache = store.runtimeStateCache
+    movementStateCache = store.movementStateCache
+end
+
+local function SyncSpellDebugRuntimeScalars()
+    local store = PvPScalpel_EnsureSpellDebugSessionStore()
+    store.activeCastGuid = activeCastGuid
+    store.targetSnapshotCache = targetSnapshotCache
+    store.activeSpellCaptureSession = activeSpellCaptureSession
+    store.heuristicRuntimeState = heuristicRuntimeState
+    store.runtimeStateCache = runtimeStateCache
+    store.movementStateCache = movementStateCache
+end
+
+PvPScalpel_BindSpellDebugRuntimeToCurrentMatchSession()
+
 local function GetMaxChatWindows()
     if Constants and Constants.ChatFrameConstants and type(Constants.ChatFrameConstants.MaxChatWindows) == "number" then
         return Constants.ChatFrameConstants.MaxChatWindows
@@ -163,17 +227,21 @@ local function ScrubOptionalString(value)
 end
 
 local function ResetSessionCollections()
-    activeSpellCaptureSession = {
+    local store = PvPScalpel_EnsureSpellDebugSessionStore()
+    store.activeSpellCaptureSession = {
         active = false,
         startedAt = nil,
         groupedHistory = {},
         locHistory = {},
         castKeyCounter = 0,
     }
+    activeSpellCaptureSession = store.activeSpellCaptureSession
+    SyncSpellDebugRuntimeScalars()
 end
 
 local function ResetHeuristicRuntimeState()
-    heuristicRuntimeState = {
+    local store = PvPScalpel_EnsureSpellDebugSessionStore()
+    store.heuristicRuntimeState = {
         watchedUnits = {},
         nameplateUnits = {},
         pendingUserCc = {},
@@ -181,6 +249,8 @@ local function ResetHeuristicRuntimeState()
         resolvedHeuristicKeys = {},
         heuristicCastKeyCounter = 0,
     }
+    heuristicRuntimeState = store.heuristicRuntimeState
+    SyncSpellDebugRuntimeScalars()
 end
 
 local function EnsureHeuristicRuntimeState()
@@ -371,6 +441,7 @@ function PvPScalpel_RestoreLocalSpellCaptureSession(snapshot, elapsedCaptureSeco
     if PvPScalpel_Debug == true then
         ShowDebugHistory()
     end
+    SyncSpellDebugRuntimeScalars()
     return true
 end
 
@@ -450,6 +521,7 @@ end
 
 RefreshTargetSnapshot = function()
     targetSnapshotCache = BuildTargetSnapshot()
+    SyncSpellDebugRuntimeScalars()
 end
 
 local function AssignTargetSnapshot(castEntry, snapshot, targetName)
@@ -780,34 +852,35 @@ PruneResolvedHeuristicEvents = function()
     state.resolvedHeuristicKeys = nextKeys
 end
 
-local function FindDebugChatFrame()
+local function FindDebugChatFrame(windowName)
     if not GetChatWindowInfo then
         return nil
     end
 
+    local expectedWindowName = windowName or DEBUG_WINDOW_NAME
     local maxChatWindows = GetMaxChatWindows()
     for i = 1, maxChatWindows do
         local ok, name = pcall(GetChatWindowInfo, i)
-        if ok and name == DEBUG_WINDOW_NAME then
+        if ok and name == expectedWindowName then
             return _G["ChatFrame" .. i]
         end
     end
     return nil
 end
 
-local function CloseDebugChatFrame()
-    local chatFrame = FindDebugChatFrame()
+local function CloseDebugChatFrame(windowName)
+    local chatFrame = FindDebugChatFrame(windowName)
     if chatFrame and FCF_Close then
         pcall(FCF_Close, chatFrame)
     end
 end
 
-local function PrepareDebugChatFrame(chatFrame)
+local function PrepareDebugChatFrame(chatFrame, preserveMessages)
     if not chatFrame then
         return nil
     end
 
-    if chatFrame.Clear then
+    if preserveMessages ~= true and chatFrame.Clear then
         chatFrame:Clear()
     end
     if chatFrame.RemoveAllMessageGroups then
@@ -816,10 +889,10 @@ local function PrepareDebugChatFrame(chatFrame)
     if chatFrame.RemoveAllChannels then
         chatFrame:RemoveAllChannels()
     end
-    if chatFrame.AddPrivateMessageTarget then
-        -- Keep the debug tab out of Blizzard's live whisper routing/history path.
-        -- A dummy target creates a private-message filter that will never match real whispers.
-        chatFrame:AddPrivateMessageTarget("__pvps_debug__")
+    if chatFrame.RemovePrivateMessageTarget then
+        -- Older builds of this addon registered a dummy whisper target on the debug tab.
+        -- That leaks into Blizzard's temporary whisper-window path and can taint the edit box.
+        pcall(chatFrame.RemovePrivateMessageTarget, chatFrame, "__pvps_debug__")
     end
 
     local chatTab = _G[chatFrame:GetName() .. "Tab"]
@@ -852,15 +925,40 @@ local function PrepareDebugChatFrame(chatFrame)
     return chatFrame
 end
 
-local function OpenDebugChatFrame()
-    local chatFrame = FindDebugChatFrame()
+local function OpenDebugChatFrame(windowName, preserveMessages)
+    local chatFrame = FindDebugChatFrame(windowName)
     if not chatFrame and FCF_OpenNewWindow then
-        local ok, openedFrame = pcall(FCF_OpenNewWindow, DEBUG_WINDOW_NAME, true)
+        local ok, openedFrame = pcall(FCF_OpenNewWindow, windowName or DEBUG_WINDOW_NAME, true)
         if ok then
             chatFrame = openedFrame
         end
     end
-    return PrepareDebugChatFrame(chatFrame)
+    return PrepareDebugChatFrame(chatFrame, preserveMessages)
+end
+
+function PvPScalpel_OpenNamedDebugChatFrame(windowName, preserveMessages)
+    return OpenDebugChatFrame(windowName, preserveMessages)
+end
+
+function PvPScalpel_FindNamedDebugChatFrame(windowName)
+    return FindDebugChatFrame(windowName)
+end
+
+function PvPScalpel_ClearNamedDebugChatFrame(windowName)
+    local chatFrame = FindDebugChatFrame(windowName)
+    if chatFrame and chatFrame.Clear then
+        chatFrame:Clear()
+    end
+    return chatFrame
+end
+
+function PvPScalpel_WriteNamedDebugChatMessage(windowName, message, r, g, b)
+    local chatFrame = OpenDebugChatFrame(windowName, true)
+    if not chatFrame or not chatFrame.AddMessage then
+        return false
+    end
+    chatFrame:AddMessage(tostring(message), r or 1.0, g or 1.0, b or 1.0)
+    return true
 end
 
 local function FormatInterruptibleValue(value)
@@ -1272,7 +1370,7 @@ local function ReplayDebugHistory(chatFrame)
 end
 
 ShowDebugHistory = function()
-    local chatFrame = OpenDebugChatFrame()
+    local chatFrame = OpenDebugChatFrame(nil, false)
     if not chatFrame then
         return
     end
@@ -2424,6 +2522,7 @@ RemoveCastEntry = function(castGUID)
         debugCastByGuid[castGUID] = nil
         if activeCastGuid == castGUID then
             activeCastGuid = nil
+            SyncSpellDebugRuntimeScalars()
         end
     end
 end
@@ -2570,6 +2669,7 @@ local function CleanupRecentResolvedCastHistory()
     end
 
     recentResolvedCastHistory = nextEntries
+    PvPScalpel_EnsureSpellDebugSessionStore().recentResolvedCastHistory = recentResolvedCastHistory
 end
 
 local function CleanupRecentLocHistory()
@@ -2586,6 +2686,7 @@ local function CleanupRecentLocHistory()
     end
 
     recentLocHistory = nextEntries
+    PvPScalpel_EnsureSpellDebugSessionStore().recentLocHistory = recentLocHistory
 end
 
 local function RegisterRecentResolvedCast(historyEntry)
@@ -2934,6 +3035,11 @@ local function LogCastAttempt(castEntry, sourceEvent)
     castEntry.attemptLoggedAtSeconds = GetDebugNow()
     castEntry.attemptLogged = true
     AppendAttemptToChat(castEntry)
+    if type(castEntry.spellID) == "number"
+        and IsKickBypassSpellID(castEntry.spellID)
+        and PvPScalpel_KicksWindowLogKickUsed then
+        PvPScalpel_KicksWindowLogKickUsed(castEntry.spellID, castEntry.spellName)
+    end
     return true
 end
 
@@ -3196,6 +3302,7 @@ local function HandleStart(castGUID, spellID)
         return
     end
     activeCastGuid = castGUID
+    SyncSpellDebugRuntimeScalars()
     LogCastAttempt(castEntry, "UNIT_SPELLCAST_START")
 end
 
@@ -3210,6 +3317,7 @@ local function HandleChannelStart(castGUID, spellID, forceEmpower, sourceEvent)
         return
     end
     activeCastGuid = castGUID
+    SyncSpellDebugRuntimeScalars()
     LogCastAttempt(castEntry, sourceEvent)
 end
 
@@ -3225,6 +3333,7 @@ local function HandleSuccess(castGUID, spellID)
         castEntry.isSucceededOnlyInstant = false
         castEntry.note = CombineDebugNotes(castEntry.note, "Observed SUCCEEDED while matching channel or empower remained active.")
         activeCastGuid = castGUID
+        SyncSpellDebugRuntimeScalars()
         if not castEntry.attemptLogged then
             LogCastAttempt(castEntry, "UNIT_SPELLCAST_SUCCEEDED")
         end
@@ -3339,6 +3448,7 @@ local function HandleStop(castGUID)
     local castEntry = debugCastByGuid[castGUID]
     if activeCastGuid == castGUID then
         activeCastGuid = nil
+        SyncSpellDebugRuntimeScalars()
     end
     if not castEntry or castEntry.outcome ~= nil then
         return
@@ -3457,15 +3567,22 @@ local function OnHeuristicUnitEvent(_, event, ...)
 end
 
 ResetRuntimeCaptureState = function()
-    debugCastByGuid = {}
-    resolvedCastByGuid = {}
-    recentResolvedCastHistory = {}
-    recentLocHistory = {}
-    activeLocByKey = {}
+    local store = PvPScalpel_EnsureSpellDebugSessionStore()
+    store.debugCastByGuid = {}
+    store.resolvedCastByGuid = {}
+    store.recentResolvedCastHistory = {}
+    store.recentLocHistory = {}
+    store.activeLocByKey = {}
+    debugCastByGuid = store.debugCastByGuid
+    resolvedCastByGuid = store.resolvedCastByGuid
+    recentResolvedCastHistory = store.recentResolvedCastHistory
+    recentLocHistory = store.recentLocHistory
+    activeLocByKey = store.activeLocByKey
     activeCastGuid = nil
     targetSnapshotCache = nil
     RefreshRuntimeStateCache()
     RefreshMovementStateCache()
+    SyncSpellDebugRuntimeScalars()
 end
 
 function MapTriStateBoolean(value)
@@ -3869,7 +3986,7 @@ function PvPScalpel_StopLocalSpellCaptureSession(match)
     if PvPScalpel_IsTable(match) then
         local localLossOfControl, locRowIndexByEntry = SerializeLocalLossOfControl()
         match.localLossOfControl = localLossOfControl
-        match.localSpellCapture = SerializeLocalSpellCapture(locRowIndexByEntry)
+        SerializeLocalSpellCapture(locRowIndexByEntry)
     end
 
     session.active = false
@@ -4056,6 +4173,9 @@ function PvPScalpel_WipeDebugState()
     if not captureActive then
         ResetRuntimeCaptureState()
         ResetSessionCollections()
+    end
+    if PvPScalpel_KicksWindowWipe then
+        PvPScalpel_KicksWindowWipe()
     end
 
     if PvPScalpel_Log then

@@ -24,6 +24,74 @@ local DAMAGE_METER_COLLECTION_MODE = {
 }
 local damageMeterCollectionMode = DAMAGE_METER_COLLECTION_MODE.SESSION
 
+local function EnsureDamageMeterSessionStore()
+    local store = PvPScalpel_EnsureCurrentMatchSessionStore()
+    if type(store.damageMeterSessions) ~= "table" then
+        store.damageMeterSessions = {}
+    end
+    if type(store.damageMeterExcludedSessionIds) ~= "table" then
+        store.damageMeterExcludedSessionIds = {}
+    end
+    if type(store.damageMeterKickStatsBySource) ~= "table" then
+        store.damageMeterKickStatsBySource = {}
+    end
+    if type(store.damageMeterMatchObservedSessions) ~= "table" then
+        store.damageMeterMatchObservedSessions = {}
+    end
+    if type(store.damageMeterLastSourceTotals) ~= "table" then
+        store.damageMeterLastSourceTotals = {}
+    end
+    if type(store.damageMeterLastSpellTotals) ~= "table" then
+        store.damageMeterLastSpellTotals = {}
+    end
+    if type(store.damageMeterLastTargetTotals) ~= "table" then
+        store.damageMeterLastTargetTotals = {}
+    end
+    return store
+end
+
+local function BindDamageMeterRuntimeToCurrentMatchSession()
+    local store = EnsureDamageMeterSessionStore()
+    damageMeterPending = store.damageMeterPending == true
+    damageMeterAttempts = type(store.damageMeterAttempts) == "number" and store.damageMeterAttempts or 0
+    damageMeterSessions = store.damageMeterSessions
+    damageMeterInCombat = store.damageMeterInCombat == true
+    damageMeterExcludedSessionIds = store.damageMeterExcludedSessionIds
+    damageMeterKickStatsBySource = store.damageMeterKickStatsBySource
+    damageMeterStartSessionId = type(store.damageMeterRuntimeStartSessionId) == "number" and store.damageMeterRuntimeStartSessionId or 0
+    damageMeterGlobalHighWaterSessionId = type(store.damageMeterGlobalHighWaterSessionId) == "number" and store.damageMeterGlobalHighWaterSessionId or 0
+    damageMeterListenersActive = store.damageMeterListenersActive == true
+    damageMeterMatchObservedSessions = store.damageMeterMatchObservedSessions
+    damageMeterLastSourceTotals = store.damageMeterLastSourceTotals
+    damageMeterLastSpellTotals = store.damageMeterLastSpellTotals
+    damageMeterLastTargetTotals = store.damageMeterLastTargetTotals
+    if store.damageMeterCollectionMode == DAMAGE_METER_COLLECTION_MODE.SNAPSHOT then
+        damageMeterCollectionMode = DAMAGE_METER_COLLECTION_MODE.SNAPSHOT
+    else
+        damageMeterCollectionMode = DAMAGE_METER_COLLECTION_MODE.SESSION
+    end
+end
+
+local function SyncDamageMeterRuntimeScalars()
+    local store = EnsureDamageMeterSessionStore()
+    store.damageMeterPending = damageMeterPending == true
+    store.damageMeterAttempts = damageMeterAttempts
+    store.damageMeterInCombat = damageMeterInCombat == true
+    store.damageMeterRuntimeStartSessionId = damageMeterStartSessionId
+    store.damageMeterGlobalHighWaterSessionId = damageMeterGlobalHighWaterSessionId
+    store.damageMeterListenersActive = damageMeterListenersActive == true
+    store.damageMeterCollectionMode = damageMeterCollectionMode
+    store.damageMeterSessions = damageMeterSessions
+    store.damageMeterExcludedSessionIds = damageMeterExcludedSessionIds
+    store.damageMeterKickStatsBySource = damageMeterKickStatsBySource
+    store.damageMeterMatchObservedSessions = damageMeterMatchObservedSessions
+    store.damageMeterLastSourceTotals = damageMeterLastSourceTotals
+    store.damageMeterLastSpellTotals = damageMeterLastSpellTotals
+    store.damageMeterLastTargetTotals = damageMeterLastTargetTotals
+end
+
+BindDamageMeterRuntimeToCurrentMatchSession()
+
 local function PvPScalpel_DamageMeterNormalizeInterruptCount(value)
     if type(value) ~= "number" or value <= 0 then
         return 0
@@ -113,6 +181,7 @@ local function PvPScalpel_DamageMeterRefreshSessions()
         local session = sessions[i]
         if session and type(session.sessionID) == "number" and session.sessionID > damageMeterGlobalHighWaterSessionId then
             damageMeterGlobalHighWaterSessionId = session.sessionID
+            SyncDamageMeterRuntimeScalars()
         end
         PvPScalpel_DamageMeterCacheSession(session.sessionID, session.name)
     end
@@ -140,23 +209,39 @@ function PvPScalpel_DamageMeterMarkStart()
     damageMeterLastSpellTotals = {}
     damageMeterLastTargetTotals = {}
     damageMeterCollectionMode = PvPScalpel_DamageMeterResolveCollectionMode()
+    SyncDamageMeterRuntimeScalars()
+    if PvPScalpel_KicksWindowReset then
+        PvPScalpel_KicksWindowReset()
+    end
     PvPScalpel_DamageMeterRefreshSessions()
     PvPScalpel_DamageMeterLog("DamageMeter: start session " .. tostring(damageMeterStartSessionId))
     PvPScalpel_DamageMeterLog("DamageMeter: mode=" .. tostring(damageMeterCollectionMode))
 end
 
 function PvPScalpel_DamageMeterResetMatchBuffer()
-    damageMeterSessions = {}
-    damageMeterExcludedSessionIds = {}
-    damageMeterKickStatsBySource = {}
-    damageMeterMatchObservedSessions = {}
-    damageMeterLastSourceTotals = {}
-    damageMeterLastSpellTotals = {}
-    damageMeterLastTargetTotals = {}
+    local store = EnsureDamageMeterSessionStore()
+    store.damageMeterSessions = {}
+    store.damageMeterExcludedSessionIds = {}
+    store.damageMeterKickStatsBySource = {}
+    store.damageMeterMatchObservedSessions = {}
+    store.damageMeterLastSourceTotals = {}
+    store.damageMeterLastSpellTotals = {}
+    store.damageMeterLastTargetTotals = {}
+    damageMeterSessions = store.damageMeterSessions
+    damageMeterExcludedSessionIds = store.damageMeterExcludedSessionIds
+    damageMeterKickStatsBySource = store.damageMeterKickStatsBySource
+    damageMeterMatchObservedSessions = store.damageMeterMatchObservedSessions
+    damageMeterLastSourceTotals = store.damageMeterLastSourceTotals
+    damageMeterLastSpellTotals = store.damageMeterLastSpellTotals
+    damageMeterLastTargetTotals = store.damageMeterLastTargetTotals
     damageMeterCollectionMode = DAMAGE_METER_COLLECTION_MODE.SESSION
     damageMeterStartSessionId = 0
     damageMeterPending = false
     damageMeterAttempts = 0
+    SyncDamageMeterRuntimeScalars()
+    if PvPScalpel_KicksWindowReset then
+        PvPScalpel_KicksWindowReset()
+    end
     PvPScalpel_DamageMeterStopUpdater()
     if damageMeterRetryTicker then
         damageMeterRetryTicker:Cancel()
@@ -182,13 +267,21 @@ function PvPScalpel_DamageMeterRestoreRecoveryState(state)
         return false
     end
 
-    damageMeterSessions = {}
-    damageMeterExcludedSessionIds = PvPScalpel_DeepCopyPlainTable(state.excludedSessionIds or {})
-    damageMeterKickStatsBySource = PvPScalpel_DeepCopyPlainTable(state.kickStatsBySource or {})
-    damageMeterMatchObservedSessions = PvPScalpel_DeepCopyPlainTable(state.matchObservedSessions or {})
-    damageMeterLastSourceTotals = PvPScalpel_DeepCopyPlainTable(state.lastSourceTotals or {})
-    damageMeterLastSpellTotals = PvPScalpel_DeepCopyPlainTable(state.lastSpellTotals or {})
-    damageMeterLastTargetTotals = PvPScalpel_DeepCopyPlainTable(state.lastTargetTotals or {})
+    local store = EnsureDamageMeterSessionStore()
+    store.damageMeterSessions = {}
+    store.damageMeterExcludedSessionIds = PvPScalpel_DeepCopyPlainTable(state.excludedSessionIds or {})
+    store.damageMeterKickStatsBySource = PvPScalpel_DeepCopyPlainTable(state.kickStatsBySource or {})
+    store.damageMeterMatchObservedSessions = PvPScalpel_DeepCopyPlainTable(state.matchObservedSessions or {})
+    store.damageMeterLastSourceTotals = PvPScalpel_DeepCopyPlainTable(state.lastSourceTotals or {})
+    store.damageMeterLastSpellTotals = PvPScalpel_DeepCopyPlainTable(state.lastSpellTotals or {})
+    store.damageMeterLastTargetTotals = PvPScalpel_DeepCopyPlainTable(state.lastTargetTotals or {})
+    damageMeterSessions = store.damageMeterSessions
+    damageMeterExcludedSessionIds = store.damageMeterExcludedSessionIds
+    damageMeterKickStatsBySource = store.damageMeterKickStatsBySource
+    damageMeterMatchObservedSessions = store.damageMeterMatchObservedSessions
+    damageMeterLastSourceTotals = store.damageMeterLastSourceTotals
+    damageMeterLastSpellTotals = store.damageMeterLastSpellTotals
+    damageMeterLastTargetTotals = store.damageMeterLastTargetTotals
     damageMeterStartSessionId = type(state.startSessionId) == "number" and state.startSessionId or 0
     damageMeterPending = false
     damageMeterAttempts = 0
@@ -198,6 +291,7 @@ function PvPScalpel_DamageMeterRestoreRecoveryState(state)
     else
         damageMeterCollectionMode = PvPScalpel_DamageMeterResolveCollectionMode()
     end
+    SyncDamageMeterRuntimeScalars()
 
     PvPScalpel_DamageMeterStopUpdater()
     if damageMeterRetryTicker then
@@ -917,6 +1011,7 @@ local function PvPScalpel_DamageMeterCollectSession(sessionId)
 
         if hasKickStats then
             damageMeterKickStatsBySource = pendingKickStatsBySource
+            SyncDamageMeterRuntimeScalars()
             PvPScalpel_DamageMeterLog("DamageMeter: snapshot kick totals captured for session " .. tostring(sessionId))
         end
     end
@@ -966,6 +1061,10 @@ local function PvPScalpel_DamageMeterCollectInternal()
         end
     end
 
+    if PvPScalpel_KicksWindowHandleOwnerSuccessTotalUpdate then
+        PvPScalpel_KicksWindowHandleOwnerSuccessTotalUpdate()
+    end
+
     return true
 end
 
@@ -985,9 +1084,11 @@ function PvPScalpel_RequestDamageMeterTotals(onComplete)
 
     damageMeterPending = true
     damageMeterAttempts = 0
+    SyncDamageMeterRuntimeScalars()
 
     local function finalize()
         damageMeterPending = false
+        SyncDamageMeterRuntimeScalars()
         if damageMeterRetryTicker then
             damageMeterRetryTicker:Cancel()
             damageMeterRetryTicker = nil
@@ -1004,6 +1105,7 @@ function PvPScalpel_RequestDamageMeterTotals(onComplete)
 
     damageMeterRetryTicker = C_Timer.NewTicker(0.3, function()
         damageMeterAttempts = damageMeterAttempts + 1
+        SyncDamageMeterRuntimeScalars()
         PvPScalpel_DamageMeterLog("DamageMeter: retry " .. tostring(damageMeterAttempts))
         if PvPScalpel_DamageMeterCollectInternal() then
             finalize()
@@ -1026,24 +1128,35 @@ local function PvPScalpel_DamageMeterOnEvent(_, event, ...)
             PvPScalpel_DamageMeterCacheSession(sessionId, "")
             if sessionId > damageMeterStartSessionId then
                 damageMeterMatchObservedSessions[sessionId] = true
+                SyncDamageMeterRuntimeScalars()
             end
         end
     elseif event == "DAMAGE_METER_CURRENT_SESSION_UPDATED" then
         local latestSessionId = PvPScalpel_DamageMeterGetLatestSessionId()
         if latestSessionId and latestSessionId > damageMeterStartSessionId then
             damageMeterMatchObservedSessions[latestSessionId] = true
+            SyncDamageMeterRuntimeScalars()
         end
     elseif event == "DAMAGE_METER_RESET" then
-        damageMeterSessions = {}
-        damageMeterExcludedSessionIds = {}
-        damageMeterKickStatsBySource = {}
-        damageMeterMatchObservedSessions = {}
-        damageMeterLastSourceTotals = {}
-        damageMeterLastSpellTotals = {}
-        damageMeterLastTargetTotals = {}
+        local store = EnsureDamageMeterSessionStore()
+        store.damageMeterSessions = {}
+        store.damageMeterExcludedSessionIds = {}
+        store.damageMeterKickStatsBySource = {}
+        store.damageMeterMatchObservedSessions = {}
+        store.damageMeterLastSourceTotals = {}
+        store.damageMeterLastSpellTotals = {}
+        store.damageMeterLastTargetTotals = {}
+        damageMeterSessions = store.damageMeterSessions
+        damageMeterExcludedSessionIds = store.damageMeterExcludedSessionIds
+        damageMeterKickStatsBySource = store.damageMeterKickStatsBySource
+        damageMeterMatchObservedSessions = store.damageMeterMatchObservedSessions
+        damageMeterLastSourceTotals = store.damageMeterLastSourceTotals
+        damageMeterLastSpellTotals = store.damageMeterLastSpellTotals
+        damageMeterLastTargetTotals = store.damageMeterLastTargetTotals
         damageMeterCollectionMode = DAMAGE_METER_COLLECTION_MODE.SESSION
         damageMeterStartSessionId = 0
         damageMeterGlobalHighWaterSessionId = 0
+        SyncDamageMeterRuntimeScalars()
     end
 end
 
@@ -1058,12 +1171,14 @@ if damageMeterCombatFrame then
                 return
             end
             damageMeterInCombat = true
+            SyncDamageMeterRuntimeScalars()
             PvPScalpel_DamageMeterStartUpdater()
         elseif event == "PLAYER_REGEN_ENABLED" then
             if not PvPScalpel_DamageMeterShouldCollect() then
                 return
             end
             damageMeterInCombat = false
+            SyncDamageMeterRuntimeScalars()
             PvPScalpel_DamageMeterStopUpdater()
             if not damageMeterPending then
                 PvPScalpel_RequestDamageMeterTotals()
@@ -1089,6 +1204,7 @@ function PvPScalpel_DamageMeterEnableListeners()
     end
 
     damageMeterListenersActive = true
+    SyncDamageMeterRuntimeScalars()
 end
 
 function PvPScalpel_DamageMeterDisableListeners()
@@ -1110,4 +1226,5 @@ function PvPScalpel_DamageMeterDisableListeners()
     PvPScalpel_DamageMeterStopUpdater()
     damageMeterInCombat = false
     damageMeterListenersActive = false
+    SyncDamageMeterRuntimeScalars()
 end

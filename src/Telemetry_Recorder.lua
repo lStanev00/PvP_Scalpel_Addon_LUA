@@ -28,6 +28,9 @@ function PvPScalpel_StartTimeline()
     currentCastRecords = nil
     castRecordByGuid = {}
     currentCastOutcomes = nil
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
 
     if PvPScalpel_StartLocalSpellCaptureSession then
         PvPScalpel_StartLocalSpellCaptureSession()
@@ -40,6 +43,22 @@ end
 function PvPScalpel_StopTimeline(match)
     if type(currentMatchKey) ~= "string" and not (PvPScalpel_IsLocalSpellCaptureActive and PvPScalpel_IsLocalSpellCaptureActive()) then
         return match
+    end
+
+    local ownerGuid = UnitGUID and UnitGUID("player") or nil
+    if type(ownerGuid) == "string"
+        and ownerGuid ~= ""
+        and PvPScalpel_KicksWindowGetOwnerPrintedKickTotal
+        and PvPScalpel_IsTable(currentInterruptSpellsBySource) then
+        local printedKickTotal = PvPScalpel_KicksWindowGetOwnerPrintedKickTotal()
+        if type(printedKickTotal) == "number" and printedKickTotal >= 0 then
+            local ownerInterrupts = currentInterruptSpellsBySource[ownerGuid]
+            if not PvPScalpel_IsTable(ownerInterrupts) then
+                ownerInterrupts = {}
+                currentInterruptSpellsBySource[ownerGuid] = ownerInterrupts
+            end
+            ownerInterrupts[0] = printedKickTotal
+        end
     end
 
     if not match then
@@ -71,6 +90,9 @@ function PvPScalpel_StopTimeline(match)
     currentInterruptSpellsBySource = nil
     currentCastOutcomes = nil
     currentBgGameType = nil
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
 
     return match
 end
@@ -79,6 +101,9 @@ function PvPScalpel_RecordSpellTotal(spellID, targetName, damage, healing, overh
     if not spellID then return end
     if not currentSpellTotals then
         currentSpellTotals = {}
+        if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+            PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+        end
     end
 
     local entry = currentSpellTotals[spellID]
@@ -132,6 +157,9 @@ function PvPScalpel_RecordSpellUtilityTotal(spellID, kind, amount)
     if not spellID or not kind then return end
     if not currentSpellTotals then
         currentSpellTotals = {}
+        if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+            PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+        end
     end
 
     local entry = currentSpellTotals[spellID]
@@ -169,6 +197,9 @@ function PvPScalpel_MergeSpellTotals(sourceTotals)
     if not PvPScalpel_IsTable(sourceTotals) then return end
     if not currentSpellTotals then
         currentSpellTotals = {}
+        if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+            PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+        end
     end
 
     for spellID, incoming in pairs(sourceTotals) do
@@ -213,6 +244,9 @@ function PvPScalpel_MergeSpellTotalsBySource(sourceMap)
     if not PvPScalpel_IsTable(sourceMap) then return end
     if not currentSpellTotalsBySource then
         currentSpellTotalsBySource = {}
+        if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+            PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+        end
     end
 
     for sourceGUID, spells in pairs(sourceMap) do
@@ -270,6 +304,9 @@ function PvPScalpel_ReplaceSpellTotalsBySource(sourceMap)
     local replaced = {}
     if not PvPScalpel_IsTable(sourceMap) then
         currentSpellTotalsBySource = replaced
+        if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+            PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+        end
         return
     end
 
@@ -306,6 +343,9 @@ function PvPScalpel_ReplaceSpellTotalsBySource(sourceMap)
     end
 
     currentSpellTotalsBySource = replaced
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
     if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
         PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("spell_totals_replace")
     end
@@ -315,6 +355,9 @@ function PvPScalpel_MergeInterruptSpellsBySource(sourceMap)
     if not PvPScalpel_IsTable(sourceMap) then return end
     if not currentInterruptSpellsBySource then
         currentInterruptSpellsBySource = {}
+        if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+            PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+        end
     end
 
     for sourceGUID, spells in pairs(sourceMap) do
@@ -341,6 +384,9 @@ function PvPScalpel_ReplaceInterruptSpellsBySource(sourceMap)
     local replaced = {}
     if not PvPScalpel_IsTable(sourceMap) then
         currentInterruptSpellsBySource = replaced
+        if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+            PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+        end
         return
     end
 
@@ -359,6 +405,9 @@ function PvPScalpel_ReplaceInterruptSpellsBySource(sourceMap)
     end
 
     currentInterruptSpellsBySource = replaced
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
     if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
         PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("interrupt_spells_replace")
     end

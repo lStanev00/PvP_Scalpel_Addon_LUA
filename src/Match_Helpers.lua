@@ -1,22 +1,45 @@
-PvPScalpel_IsTracking = PvPScalpel_IsTracking or false
-PvPScalpel_WaitingForGateOpen = PvPScalpel_WaitingForGateOpen or false
-PvPScalpel_LastSavedMatchTime = PvPScalpel_LastSavedMatchTime or nil
-PvPScalpel_CurrentPlayerName = PvPScalpel_CurrentPlayerName or UnitFullName("player")
+function PvPScalpel_BindMatchStateToCurrentMatchSession()
+    local store = PvPScalpel_EnsureCurrentMatchSessionStore()
+    if type(store.currentPlayerName) ~= "string" or store.currentPlayerName == "" then
+        store.currentPlayerName = UnitFullName("player")
+    end
+    if type(store.soloShuffleState) ~= "table" then
+        store.soloShuffleState = {
+            active = false,
+            rounds = {},
+            currentRound = nil,
+            currentRoundIndex = 0,
+            currentRoundStart = nil,
+            currentRoundCastByGuid = nil,
+            lastMatchState = nil,
+            notes = {},
+            saved = false,
+        }
+    end
 
-soloShuffleState = soloShuffleState or {
-    active = false,
-    rounds = {},
-    currentRound = nil,
-    currentRoundIndex = 0,
-    currentRoundStart = nil,
-    currentRoundCastByGuid = nil,
-    lastMatchState = nil,
-    notes = {},
-    saved = false,
-}
+    PvPScalpel_IsTracking = store.isTracking == true
+    PvPScalpel_WaitingForGateOpen = store.waitingForGateOpen == true
+    PvPScalpel_LastSavedMatchTime = store.lastSavedMatchTime
+    PvPScalpel_CurrentPlayerName = store.currentPlayerName
+    soloShuffleState = store.soloShuffleState
+end
+
+function PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    local store = PvPScalpel_EnsureCurrentMatchSessionStore()
+    store.isTracking = PvPScalpel_IsTracking == true
+    store.waitingForGateOpen = PvPScalpel_WaitingForGateOpen == true
+    store.lastSavedMatchTime = PvPScalpel_LastSavedMatchTime
+    store.currentPlayerName = PvPScalpel_CurrentPlayerName
+    store.soloShuffleState = soloShuffleState
+end
+
+PvPScalpel_BindMatchStateToCurrentMatchSession()
 
 function PvPScalpel_ResetCaptureIntegrity()
     currentCaptureIntegrity = nil
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
 end
 
 function PvPScalpel_EnsureCaptureIntegrity()
@@ -32,6 +55,9 @@ function PvPScalpel_EnsureCaptureIntegrity()
             reloadRecoveryCount = 0,
             notes = {},
         }
+        if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+            PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+        end
     end
     if type(currentCaptureIntegrity.notes) ~= "table" then
         currentCaptureIntegrity.notes = {}
@@ -93,7 +119,7 @@ local function AttachScoreboardOnlyReloadFallback(match)
     if not (PvPScalpel_WasMidMatchRecoveryRequested and PvPScalpel_WasMidMatchRecoveryRequested()) then
         return false
     end
-    if not PvPScalpel_BuildEmptyLocalSpellCapturePayload or not PvPScalpel_BuildEmptyLocalLossOfControlPayload then
+    if not PvPScalpel_BuildEmptyLocalLossOfControlPayload then
         return false
     end
 
@@ -110,7 +136,6 @@ local function AttachScoreboardOnlyReloadFallback(match)
     PvPScalpel_MarkCaptureIntegrity(nil, "scoreboard_only_after_reload")
 
     match.localLossOfControl = PvPScalpel_BuildEmptyLocalLossOfControlPayload()
-    match.localSpellCapture = PvPScalpel_BuildEmptyLocalSpellCapturePayload()
 
     local captureIntegrity = PvPScalpel_BuildCaptureIntegrity()
     if PvPScalpel_IsTable(captureIntegrity) then
@@ -130,6 +155,9 @@ end
 
 local function PvPScalpel_ResetMatchStartMetadata()
     currentBgGameType = nil
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
 end
 
 local function PvPScalpel_CaptureMatchStartMetadata()
@@ -161,6 +189,9 @@ local function PvPScalpel_CaptureMatchStartMetadata()
             local gameType = battlegroundInfo.gameType
             if type(gameType) == "string" and gameType ~= "" then
                 currentBgGameType = gameType
+                if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+                    PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+                end
             end
             return
         end
@@ -221,11 +252,17 @@ function PvPScalpel_ResetSoloShuffleState()
     soloShuffleState.lastMatchState = nil
     soloShuffleState.notes = {}
     soloShuffleState.saved = false
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
 end
 
 function PvPScalpel_StartSoloShuffleSession()
     PvPScalpel_ResetSoloShuffleState()
     soloShuffleState.active = true
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
     if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
         PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("solo_shuffle_session_start")
     end
@@ -254,6 +291,9 @@ function PvPScalpel_StartSoloShuffleRound()
         PvPScalpel_SoloShuffleNote("rounds_table_reset")
     end
     table.insert(soloShuffleState.rounds, round)
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
     PvPScalpel_Log(("Solo Shuffle: Round %d start"):format(soloShuffleState.currentRoundIndex))
     if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
         PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("solo_shuffle_round_start")
@@ -272,6 +312,7 @@ end
 function PvPScalpel_BuildInterruptSummary(sourceGUID)
     local total = 0
     local succeeded = 0
+    local ownerGuid = UnitGUID and UnitGUID("player") or nil
     if PvPScalpel_DamageMeterGetInterruptTotalsForSource then
         local rawTotal, rawSucceeded = PvPScalpel_DamageMeterGetInterruptTotalsForSource(sourceGUID)
         if type(rawTotal) == "number" and rawTotal > 0 then
@@ -279,6 +320,15 @@ function PvPScalpel_BuildInterruptSummary(sourceGUID)
         end
         if type(rawSucceeded) == "number" and rawSucceeded > 0 then
             succeeded = rawSucceeded
+        end
+    end
+    if type(sourceGUID) == "string"
+        and sourceGUID ~= ""
+        and sourceGUID == ownerGuid
+        and PvPScalpel_KicksWindowGetOwnerPrintedKickTotal then
+        local printedKickTotal = PvPScalpel_KicksWindowGetOwnerPrintedKickTotal()
+        if type(printedKickTotal) == "number" and printedKickTotal >= 0 then
+            total = printedKickTotal
         end
     end
     if succeeded > total then
@@ -372,6 +422,9 @@ function PvPScalpel_EndSoloShuffleRound()
     soloShuffleState.currentRound = nil
     soloShuffleState.currentRoundStart = nil
     soloShuffleState.currentRoundCastByGuid = nil
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
     PvPScalpel_Log(("Solo Shuffle: Round %d end (%.1fs)"):format(round.roundIndex, round.duration or 0))
     if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
         PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("solo_shuffle_round_end")
@@ -390,6 +443,9 @@ function PvPScalpel_HandleSoloShuffleStateChange()
         return
     end
     soloShuffleState.lastMatchState = state
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
 
     if Enum and Enum.PvPMatchState then
         if state == Enum.PvPMatchState.Engaged then
@@ -440,6 +496,9 @@ function PvPScalpel_BeginMatchCapture(trigger)
     end
     PvPScalpel_ResetCaptureIntegrity()
     lastMatchDuration = nil
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
     PvPScalpel_Log("PVP capture START (" .. tostring(trigger) .. ")")
     if PvPScalpel_RegisterRuntimeListeners then
         PvPScalpel_RegisterRuntimeListeners()
@@ -453,6 +512,9 @@ function PvPScalpel_BeginMatchCapture(trigger)
         PvPScalpel_DamageMeterMarkStart()
     end
     PvPScalpel_Log("Local spell capture STARTED after gates opened.")
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
     if PvPScalpel_UpdateActiveMatchRecoveryCheckpoint then
         PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("capture_begin")
     end
@@ -486,6 +548,12 @@ function PvPScalpel_AbortActiveCapture(reason)
     PvPScalpel_WaitingForGateOpen = false
     PvPScalpel_IsTracking = false
     lastMatchDuration = nil
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
     PvPScalpel_ResetCaptureIntegrity()
     if PvPScalpel_ClearActiveMatchRecovery then
         PvPScalpel_ClearActiveMatchRecovery("abort_capture")
@@ -502,6 +570,12 @@ function PvPScalpel_FinalizeCaptureBuffer()
     PvPScalpel_ResetMatchStartMetadata()
     PvPScalpel_IsTracking = false
     lastMatchDuration = nil
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
     PvPScalpel_ResetCaptureIntegrity()
     if PvPScalpel_ClearActiveMatchRecovery then
         PvPScalpel_ClearActiveMatchRecovery("finalize_capture")
@@ -589,7 +663,7 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
     end
     local match = {
         matchKey = matchKey,
-        telemetryVersion = 4.0,
+        telemetryVersion = 5,
         winner = lastMatchWinner,
         duration = PvPScalpel_GetResolvedMatchDurationSeconds(),
         matchDetails = {
@@ -645,18 +719,13 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         },
         integrity = {
             scoreboardComplete = scoreboardReady and totalPlayers > 0,
-            timelineComplete = PvPScalpel_IsTable(match.localSpellCapture) and PvPScalpel_IsTable(match.localLossOfControl),
+            timelineComplete = PvPScalpel_IsTable(match.localLossOfControl),
             roundsComplete = roundsCaptured == 6,
             notes = integrityNotes,
         }
     }
 
     if PvPScalpel_LastSavedMatchTime ~= now then
-        if not PvPScalpel_IsTable(match.localSpellCapture) then
-            PvPScalpel_SoloShuffleNote("local_spell_capture_missing")
-            PvPScalpel_FinalizeCaptureBuffer()
-            return
-        end
         if not PvPScalpel_IsTable(match.localLossOfControl) then
             PvPScalpel_SoloShuffleNote("local_loss_of_control_missing")
             PvPScalpel_FinalizeCaptureBuffer()
@@ -673,6 +742,9 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
         end
         PvPScalpel_LastSavedMatchTime = now
         soloShuffleState.saved = true
+        if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+            PvPScalpel_SyncMatchStateToCurrentMatchSession()
+        end
         PvPScalpel_Log("Solo Shuffle: match saved (" .. tostring(roundsCaptured) .. " rounds)")
     else
         PvPScalpel_SoloShuffleNote("duplicate_match_timestamp")
@@ -705,7 +777,7 @@ function PvPScalpel_TryCaptureMatch(attempt)
     end
     local match = {
         matchKey = matchKey,
-        telemetryVersion = 4.0,
+        telemetryVersion = 5,
         winner = lastMatchWinner,
         duration = PvPScalpel_GetResolvedMatchDurationSeconds(),
         matchDetails = {
@@ -780,15 +852,8 @@ function PvPScalpel_TryCaptureMatch(attempt)
 
     if PvPScalpel_LastSavedMatchTime ~= now and #match.players > 0 then
         match = PvPScalpel_StopTimeline(match)
-        if not PvPScalpel_IsTable(match.localSpellCapture) then
-            AttachScoreboardOnlyReloadFallback(match)
-        end
         if not PvPScalpel_IsTable(match.localLossOfControl) then
             AttachScoreboardOnlyReloadFallback(match)
-        end
-        if not PvPScalpel_IsTable(match.localSpellCapture) then
-            PvPScalpel_FinalizeCaptureBuffer()
-            return
         end
         if not PvPScalpel_IsTable(match.localLossOfControl) then
             PvPScalpel_FinalizeCaptureBuffer()
@@ -803,6 +868,9 @@ function PvPScalpel_TryCaptureMatch(attempt)
             PvP_Scalpel_GC[match.matchKey] = "pending"
         end
         PvPScalpel_LastSavedMatchTime = now
+        if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+            PvPScalpel_SyncMatchStateToCurrentMatchSession()
+        end
         PvPScalpel_Log("PvP Scalpel: Match saved (" .. #match.players .. " players)")
         if PvPScalpel_BlitzMmrHeaderHandleMatchSaved then
             PvPScalpel_BlitzMmrHeaderHandleMatchSaved(match)

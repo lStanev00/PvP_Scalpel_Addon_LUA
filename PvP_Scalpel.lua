@@ -1,9 +1,7 @@
 PvP_Scalpel_DB = PvP_Scalpel_DB or {}
 PvP_Scalpel_InteruptSpells = PvP_Scalpel_InteruptSpells or {}
 PvP_Scalpel_GC = PvP_Scalpel_GC or {}
-PvP_Scalpel_ActiveMatchRecovery = PvP_Scalpel_ActiveMatchRecovery or {}
 
-local ACTIVE_MATCH_RECOVERY_SCHEMA_VERSION = 1
 local RELOAD_RECOVERY_DURATION_TOLERANCE_SECONDS = 5.0
 local MID_MATCH_RECOVERY_RETRY_INTERVAL_SECONDS = 0.5
 local MID_MATCH_RECOVERY_RETRY_MAX_ATTEMPTS = 20
@@ -14,64 +12,8 @@ local midMatchRecoveryRequested = false
 local midMatchRecoveryRetryExhausted = false
 local addonSessionColdStart = true
 
-local function CreateEmptyActiveMatchRecoveryStore()
-    return {
-        schemaVersion = ACTIVE_MATCH_RECOVERY_SCHEMA_VERSION,
-        active = false,
-        matchKey = "",
-        format = "",
-        mapName = "",
-        bgGameType = nil,
-        isRatedSoloShuffle = false,
-        lastSeenMatchDurationSeconds = -1,
-        captureStartOffsetSeconds = -1,
-        reloadRecoveryCount = 0,
-        spellCapture = nil,
-        aggregates = {
-            spellTotalsBySource = {},
-            interruptSpellsBySource = {},
-        },
-        damageMeter = nil,
-        soloShuffle = nil,
-        notes = {},
-    }
-end
-
 local function EnsureActiveMatchRecoveryStore()
-    if type(PvP_Scalpel_ActiveMatchRecovery) ~= "table" then
-        PvP_Scalpel_ActiveMatchRecovery = CreateEmptyActiveMatchRecoveryStore()
-    end
-
-    local store = PvP_Scalpel_ActiveMatchRecovery
-    if store.schemaVersion ~= ACTIVE_MATCH_RECOVERY_SCHEMA_VERSION then
-        store = CreateEmptyActiveMatchRecoveryStore()
-        PvP_Scalpel_ActiveMatchRecovery = store
-    end
-    if type(store.aggregates) ~= "table" then
-        store.aggregates = {
-            spellTotalsBySource = {},
-            interruptSpellsBySource = {},
-        }
-    end
-    if type(store.aggregates.spellTotalsBySource) ~= "table" then
-        store.aggregates.spellTotalsBySource = {}
-    end
-    if type(store.aggregates.interruptSpellsBySource) ~= "table" then
-        store.aggregates.interruptSpellsBySource = {}
-    end
-    if type(store.notes) ~= "table" then
-        store.notes = {}
-    end
-    if type(store.reloadRecoveryCount) ~= "number" then
-        store.reloadRecoveryCount = 0
-    end
-    if type(store.lastSeenMatchDurationSeconds) ~= "number" then
-        store.lastSeenMatchDurationSeconds = -1
-    end
-    if type(store.captureStartOffsetSeconds) ~= "number" then
-        store.captureStartOffsetSeconds = -1
-    end
-    return store
+    return PvPScalpel_EnsureCurrentMatchSessionStore()
 end
 
 local function AppendActiveRecoveryNote(store, note)
@@ -231,11 +173,14 @@ local function HasActiveMatchRecoveryCheckpoint()
 end
 
 function PvPScalpel_ClearActiveMatchRecovery(reason)
-    local store = CreateEmptyActiveMatchRecoveryStore()
-    if type(reason) == "string" and reason ~= "" then
-        AppendActiveRecoveryNote(store, reason)
+    local store = PvPScalpel_ResetCurrentMatchSessionStore(reason)
+    if PvPScalpel_BindRecorderStateToCurrentMatchSession then
+        PvPScalpel_BindRecorderStateToCurrentMatchSession()
     end
-    PvP_Scalpel_ActiveMatchRecovery = store
+    if PvPScalpel_BindMatchStateToCurrentMatchSession then
+        PvPScalpel_BindMatchStateToCurrentMatchSession()
+    end
+    return store
 end
 
 function PvPScalpel_WasMidMatchRecoveryRequested()
@@ -323,6 +268,12 @@ local function RestoreActiveMatchRecovery(formatCheck, mapName, bgGameType)
     currentBgGameType = store.bgGameType
     PvPScalpel_IsTracking = true
     PvPScalpel_WaitingForGateOpen = false
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
 
     RestoreSoloShuffleRecoveryState(store.soloShuffle)
 
@@ -382,6 +333,9 @@ end
 local function StartMidMatchDegradedCapture(reasonNote)
     PvPScalpel_BeginMatchCapture("PLAYER_ENTERING_WORLD_MID_MATCH")
     PvPScalpel_WaitingForGateOpen = false
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
 
     if PvPScalpel_IsRatedSoloShuffle and PvPScalpel_IsRatedSoloShuffle() then
         if type(soloShuffleState) ~= "table" or soloShuffleState.active ~= true then
@@ -550,6 +504,9 @@ function PvPScalpel_HandleZoneLifecycle()
 
     if not PvPScalpel_IsTracking then
         PvPScalpel_IsTracking = true
+        if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+            PvPScalpel_SyncMatchStateToCurrentMatchSession()
+        end
         PvPScalpel_Log(tostring(currentMatchKey))
         PvPScalpel_Log(("PvPScalpel: Tracking ON (%s)"):format(formatCheck))
     end
@@ -565,17 +522,32 @@ function PvPScalpel_HandlePvpMatchActive()
         if ShouldPreferMidMatchRecovery() then
             MaybeStartMidMatchRecoveryRetry("PVP_MATCH_ACTIVE")
             PvPScalpel_WaitingForGateOpen = false
+            if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+                PvPScalpel_SyncMatchStateToCurrentMatchSession()
+            end
         elseif PvPScalpel_IsLiveMatchStarted() then
             ResetMidMatchRecoveryRuntime()
             PvPScalpel_WaitingForGateOpen = true
+            if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+                PvPScalpel_SyncMatchStateToCurrentMatchSession()
+            end
             PvPScalpel_BeginMatchCapture("PVP_MATCH_ACTIVE")
             PvPScalpel_WaitingForGateOpen = false
+            if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+                PvPScalpel_SyncMatchStateToCurrentMatchSession()
+            end
         else
             PvPScalpel_WaitingForGateOpen = true
+            if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+                PvPScalpel_SyncMatchStateToCurrentMatchSession()
+            end
             PvPScalpel_Log("Waiting for gates to open before starting capture...")
         end
     else
         PvPScalpel_WaitingForGateOpen = false
+        if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+            PvPScalpel_SyncMatchStateToCurrentMatchSession()
+        end
     end
 
     if PvPScalpel_IsRatedSoloShuffle and PvPScalpel_IsRatedSoloShuffle() then
@@ -591,6 +563,9 @@ end
 
 function PvPScalpel_HandlePvpMatchComplete(winner, duration)
     PvPScalpel_WaitingForGateOpen = false
+    if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+        PvPScalpel_SyncMatchStateToCurrentMatchSession()
+    end
     StopMidMatchRecoveryRetry(true)
     PvPScalpel_Log(string.format("PVP MATCH COMPLETE. Winner: %s | Duration: %s", tostring(winner), tostring(duration)))
 
@@ -613,6 +588,9 @@ function PvPScalpel_HandlePvpMatchComplete(winner, duration)
     else
         lastMatchWinner = "draw"
     end
+    if PvPScalpel_SyncRecorderStateToCurrentMatchSession then
+        PvPScalpel_SyncRecorderStateToCurrentMatchSession()
+    end
 
     PvPScalpel_WriteMatchResult()
 end
@@ -621,10 +599,16 @@ function PvPScalpel_HandlePvpMatchStateChanged()
     if not IsLocalSpellCaptureRunning() and ShouldPreferMidMatchRecovery() then
         MaybeStartMidMatchRecoveryRetry("PVP_MATCH_STATE_CHANGED")
         PvPScalpel_WaitingForGateOpen = false
+        if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+            PvPScalpel_SyncMatchStateToCurrentMatchSession()
+        end
     elseif PvPScalpel_WaitingForGateOpen and PvPScalpel_IsLiveMatchStarted() then
         ResetMidMatchRecoveryRuntime()
         PvPScalpel_BeginMatchCapture("PVP_MATCH_STATE_CHANGED")
         PvPScalpel_WaitingForGateOpen = false
+        if PvPScalpel_SyncMatchStateToCurrentMatchSession then
+            PvPScalpel_SyncMatchStateToCurrentMatchSession()
+        end
     end
 
     if PvPScalpel_IsRatedSoloShuffle and PvPScalpel_IsRatedSoloShuffle() then
