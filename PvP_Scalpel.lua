@@ -5,6 +5,14 @@ PvP_Scalpel_ActiveMatchRecovery = PvP_Scalpel_ActiveMatchRecovery or {}
 
 local ACTIVE_MATCH_RECOVERY_SCHEMA_VERSION = 1
 local RELOAD_RECOVERY_DURATION_TOLERANCE_SECONDS = 5.0
+local MID_MATCH_RECOVERY_RETRY_INTERVAL_SECONDS = 0.5
+local MID_MATCH_RECOVERY_RETRY_MAX_ATTEMPTS = 20
+
+local midMatchRecoveryRetryToken = 0
+local midMatchRecoveryRetryRunning = false
+local midMatchRecoveryRequested = false
+local midMatchRecoveryRetryExhausted = false
+local addonSessionColdStart = true
 
 local function CreateEmptyActiveMatchRecoveryStore()
     return {
@@ -79,6 +87,24 @@ local function AppendActiveRecoveryNote(store, note)
         end
     end
     table.insert(store.notes, note)
+end
+
+local function StopMidMatchRecoveryRetry(preserveRequested)
+    midMatchRecoveryRetryToken = midMatchRecoveryRetryToken + 1
+    midMatchRecoveryRetryRunning = false
+    if preserveRequested ~= true then
+        midMatchRecoveryRequested = false
+    end
+end
+
+local function ResetMidMatchRecoveryRuntime()
+    StopMidMatchRecoveryRetry(false)
+    midMatchRecoveryRetryExhausted = false
+    addonSessionColdStart = false
+end
+
+function PvPScalpel_ResetMidMatchRecoveryRuntime()
+    ResetMidMatchRecoveryRuntime()
 end
 
 local function GetCurrentMapName()
@@ -199,12 +225,25 @@ local function ValidateActiveMatchRecoveryStore(store, formatCheck, mapName, bgG
     return true, nil
 end
 
+local function HasActiveMatchRecoveryCheckpoint()
+    local store = EnsureActiveMatchRecoveryStore()
+    return store.active == true
+end
+
 function PvPScalpel_ClearActiveMatchRecovery(reason)
     local store = CreateEmptyActiveMatchRecoveryStore()
     if type(reason) == "string" and reason ~= "" then
         AppendActiveRecoveryNote(store, reason)
     end
     PvP_Scalpel_ActiveMatchRecovery = store
+end
+
+function PvPScalpel_WasMidMatchRecoveryRequested()
+    return midMatchRecoveryRequested == true
+end
+
+function PvPScalpel_WasMidMatchRecoveryRetryExhausted()
+    return midMatchRecoveryRetryExhausted == true
 end
 
 function PvPScalpel_UpdateActiveMatchRecoveryCheckpoint(reason)
@@ -331,7 +370,11 @@ local function RestoreActiveMatchRecovery(formatCheck, mapName, bgGameType)
         PvPScalpel_MarkCaptureIntegrity(nil, "open_casts_dropped_on_reload")
     end
 
+    StopMidMatchRecoveryRetry(false)
+    midMatchRecoveryRetryExhausted = false
+    addonSessionColdStart = false
     PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("recovered_after_reload")
+    PvPScalpel_Log("Mid-match recovery retry success: restored active capture after reload.")
     PvPScalpel_NotifyUser("Session recovered after UI reload. Match capture resumed with gap markers.")
     return true, nil
 end
@@ -359,19 +402,20 @@ local function StartMidMatchDegradedCapture(reasonNote)
         PvPScalpel_MarkCaptureIntegrity(nil, "checkpoint_missing_on_mid_match_load")
     end
 
+    StopMidMatchRecoveryRetry(false)
+    midMatchRecoveryRetryExhausted = false
+    addonSessionColdStart = false
     PvPScalpel_UpdateActiveMatchRecoveryCheckpoint("started_mid_match")
+    PvPScalpel_Log("Mid-match recovery retry fallback: started degraded mid-match capture.")
     PvPScalpel_NotifyUser("Match already in progress after UI reload. Capture resumed mid-match and is marked degraded.")
 end
 
 local function TryHandleMidMatchRecovery(formatCheck)
-    if not IsKnownPvpFormat(formatCheck) then
-        return
-    end
-    if IsLocalSpellCaptureRunning() then
-        return
+    if not IsKnownPvpFormat(formatCheck) or IsLocalSpellCaptureRunning() then
+        return false
     end
     if not PvPScalpel_IsLiveMatchStarted or PvPScalpel_IsLiveMatchStarted() ~= true then
-        return
+        return false
     end
 
     local mapName = GetCurrentMapName()
@@ -380,6 +424,77 @@ local function TryHandleMidMatchRecovery(formatCheck)
     if restored ~= true then
         StartMidMatchDegradedCapture(failureNote)
     end
+    return true
+end
+
+local function StartMidMatchRecoveryRetry(source)
+    if midMatchRecoveryRetryRunning then
+        return
+    end
+
+    midMatchRecoveryRetryRunning = true
+    midMatchRecoveryRequested = true
+    local retryToken = midMatchRecoveryRetryToken + 1
+    midMatchRecoveryRetryToken = retryToken
+    local attempts = 0
+
+    PvPScalpel_Log("Mid-match recovery retry start (" .. tostring(source) .. ")")
+
+    local function Attempt()
+        if retryToken ~= midMatchRecoveryRetryToken or midMatchRecoveryRetryRunning ~= true then
+            return
+        end
+        if IsLocalSpellCaptureRunning() then
+            StopMidMatchRecoveryRetry(false)
+            midMatchRecoveryRetryExhausted = false
+            return
+        end
+
+        local formatCheck = GetCurrentFormatCheck()
+        if not IsKnownPvpFormat(formatCheck) then
+            StopMidMatchRecoveryRetry(false)
+            return
+        end
+
+        attempts = attempts + 1
+        if TryHandleMidMatchRecovery(formatCheck) then
+            return
+        end
+
+        if attempts >= MID_MATCH_RECOVERY_RETRY_MAX_ATTEMPTS then
+            midMatchRecoveryRetryRunning = false
+            midMatchRecoveryRetryExhausted = true
+            PvPScalpel_Log("Mid-match recovery retry exhausted without starting capture.")
+            return
+        end
+
+        C_Timer.After(MID_MATCH_RECOVERY_RETRY_INTERVAL_SECONDS, Attempt)
+    end
+
+    Attempt()
+end
+
+local function MaybeStartMidMatchRecoveryRetry(source)
+    local formatCheck = GetCurrentFormatCheck()
+    if not IsKnownPvpFormat(formatCheck) or IsLocalSpellCaptureRunning() then
+        return
+    end
+    if not HasActiveMatchRecoveryCheckpoint() and not (PvPScalpel_IsLiveMatchStarted and PvPScalpel_IsLiveMatchStarted() == true) then
+        return
+    end
+    StartMidMatchRecoveryRetry(source)
+end
+
+local function ShouldPreferMidMatchRecovery()
+    if midMatchRecoveryRequested == true or HasActiveMatchRecoveryCheckpoint() then
+        return true
+    end
+    if addonSessionColdStart == true
+        and PvPScalpel_IsLiveMatchStarted
+        and PvPScalpel_IsLiveMatchStarted() == true then
+        return true
+    end
+    return false
 end
 
 if PvPScalpel_ApplyGarbageCollectionQueue then
@@ -424,6 +539,7 @@ function PvPScalpel_HandleZoneLifecycle()
     local captureActive = IsLocalSpellCaptureRunning()
 
     if not IsKnownPvpFormat(formatCheck) then
+        ResetMidMatchRecoveryRuntime()
         if captureActive or PvPScalpel_IsTracking then
             PvPScalpel_AbortActiveCapture("left_pvp_instance")
         else
@@ -438,7 +554,7 @@ function PvPScalpel_HandleZoneLifecycle()
         PvPScalpel_Log(("PvPScalpel: Tracking ON (%s)"):format(formatCheck))
     end
 
-    TryHandleMidMatchRecovery(formatCheck)
+    MaybeStartMidMatchRecoveryRetry("zone_lifecycle")
 end
 
 function PvPScalpel_HandlePvpMatchActive()
@@ -446,12 +562,16 @@ function PvPScalpel_HandlePvpMatchActive()
 
     PvPScalpel_Log("PVP MATCH ACTIVE detected.")
     if not alreadyCapturing then
-        PvPScalpel_WaitingForGateOpen = true
-
-        if PvPScalpel_IsLiveMatchStarted() then
+        if ShouldPreferMidMatchRecovery() then
+            MaybeStartMidMatchRecoveryRetry("PVP_MATCH_ACTIVE")
+            PvPScalpel_WaitingForGateOpen = false
+        elseif PvPScalpel_IsLiveMatchStarted() then
+            ResetMidMatchRecoveryRuntime()
+            PvPScalpel_WaitingForGateOpen = true
             PvPScalpel_BeginMatchCapture("PVP_MATCH_ACTIVE")
             PvPScalpel_WaitingForGateOpen = false
         else
+            PvPScalpel_WaitingForGateOpen = true
             PvPScalpel_Log("Waiting for gates to open before starting capture...")
         end
     else
@@ -471,6 +591,7 @@ end
 
 function PvPScalpel_HandlePvpMatchComplete(winner, duration)
     PvPScalpel_WaitingForGateOpen = false
+    StopMidMatchRecoveryRetry(true)
     PvPScalpel_Log(string.format("PVP MATCH COMPLETE. Winner: %s | Duration: %s", tostring(winner), tostring(duration)))
 
     lastMatchWinner = nil
@@ -497,7 +618,11 @@ function PvPScalpel_HandlePvpMatchComplete(winner, duration)
 end
 
 function PvPScalpel_HandlePvpMatchStateChanged()
-    if PvPScalpel_WaitingForGateOpen and PvPScalpel_IsLiveMatchStarted() then
+    if not IsLocalSpellCaptureRunning() and ShouldPreferMidMatchRecovery() then
+        MaybeStartMidMatchRecoveryRetry("PVP_MATCH_STATE_CHANGED")
+        PvPScalpel_WaitingForGateOpen = false
+    elseif PvPScalpel_WaitingForGateOpen and PvPScalpel_IsLiveMatchStarted() then
+        ResetMidMatchRecoveryRuntime()
         PvPScalpel_BeginMatchCapture("PVP_MATCH_STATE_CHANGED")
         PvPScalpel_WaitingForGateOpen = false
     end

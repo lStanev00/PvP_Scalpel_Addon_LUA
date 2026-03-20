@@ -3815,6 +3815,38 @@ local function SerializeLocalSpellCapture(locRowIndexByEntry)
     }
 end
 
+function PvPScalpel_BuildEmptyLocalLossOfControlPayload()
+    return {
+        captureVersion = 1,
+        timeUnit = "cs",
+        totals = {
+            entries = 0,
+            linked = 0,
+            unlinked = 0,
+        },
+        entries = {
+            [0] = GetLocSchemaRow(),
+        },
+    }
+end
+
+function PvPScalpel_BuildEmptyLocalSpellCapturePayload()
+    return {
+        captureVersion = 1,
+        timeUnit = "cs",
+        totals = {
+            spells = 0,
+            casts = 0,
+            success = 0,
+            notSuccess = 0,
+            interrupted = 0,
+            kicked = 0,
+            cancelled = 0,
+        },
+        bySpellID = {},
+    }
+end
+
 function PvPScalpel_IsLocalSpellCaptureActive()
     return IsSpellCaptureSessionActive()
 end

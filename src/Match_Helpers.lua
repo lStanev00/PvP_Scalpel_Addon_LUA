@@ -86,6 +86,44 @@ function PvPScalpel_BuildCaptureIntegrity()
     return PvPScalpel_DeepCopyPlainTable(integrity)
 end
 
+local function AttachScoreboardOnlyReloadFallback(match)
+    if type(match) ~= "table" then
+        return false
+    end
+    if not (PvPScalpel_WasMidMatchRecoveryRequested and PvPScalpel_WasMidMatchRecoveryRequested()) then
+        return false
+    end
+    if not PvPScalpel_BuildEmptyLocalSpellCapturePayload or not PvPScalpel_BuildEmptyLocalLossOfControlPayload then
+        return false
+    end
+
+    PvPScalpel_ResetCaptureIntegrity()
+    local integrity = PvPScalpel_EnsureCaptureIntegrity()
+    integrity.startedMidMatch = true
+    integrity.hasEventGap = true
+    integrity.checkpointRestored = false
+    integrity.spellSessionRestored = false
+    integrity.damageMeterRestored = false
+
+    PvPScalpel_MarkCaptureIntegrity("startedMidMatch", "started_mid_match")
+    PvPScalpel_MarkCaptureIntegrity(nil, "recovery_retry_exhausted")
+    PvPScalpel_MarkCaptureIntegrity(nil, "scoreboard_only_after_reload")
+
+    match.localLossOfControl = PvPScalpel_BuildEmptyLocalLossOfControlPayload()
+    match.localSpellCapture = PvPScalpel_BuildEmptyLocalSpellCapturePayload()
+
+    local captureIntegrity = PvPScalpel_BuildCaptureIntegrity()
+    if PvPScalpel_IsTable(captureIntegrity) then
+        match.captureIntegrity = captureIntegrity
+    end
+
+    PvPScalpel_Log("Mid-match reload fallback: saving scoreboard-only degraded match.")
+    if PvPScalpel_NotifyUser then
+        PvPScalpel_NotifyUser("Match saved after UI reload in degraded mode. Spell history could not be restored, so this record is scoreboard-only.")
+    end
+    return true
+end
+
 function PvPScalpel_IsRatedSoloShuffle()
     return C_PvP and C_PvP.IsRatedSoloShuffle and C_PvP.IsRatedSoloShuffle()
 end
@@ -397,6 +435,9 @@ function PvPScalpel_BeginMatchCapture(trigger)
         return
     end
 
+    if PvPScalpel_ResetMidMatchRecoveryRuntime then
+        PvPScalpel_ResetMidMatchRecoveryRuntime()
+    end
     PvPScalpel_ResetCaptureIntegrity()
     lastMatchDuration = nil
     PvPScalpel_Log("PVP capture START (" .. tostring(trigger) .. ")")
@@ -437,6 +478,9 @@ function PvPScalpel_AbortActiveCapture(reason)
         PvPScalpel_StopTimeline(nil)
     end
 
+    if PvPScalpel_ResetMidMatchRecoveryRuntime then
+        PvPScalpel_ResetMidMatchRecoveryRuntime()
+    end
     PvPScalpel_ResetMatchStartMetadata()
     PvPScalpel_ResetSoloShuffleState()
     PvPScalpel_WaitingForGateOpen = false
@@ -451,6 +495,9 @@ end
 function PvPScalpel_FinalizeCaptureBuffer()
     if PvPScalpel_DamageMeterResetMatchBuffer then
         PvPScalpel_DamageMeterResetMatchBuffer()
+    end
+    if PvPScalpel_ResetMidMatchRecoveryRuntime then
+        PvPScalpel_ResetMidMatchRecoveryRuntime()
     end
     PvPScalpel_ResetMatchStartMetadata()
     PvPScalpel_IsTracking = false
@@ -536,8 +583,12 @@ function PvPScalpel_FinalizeSoloShuffleMatch(attempt)
     local mapName = GetRealZoneText()
     local now = date("%Y-%m-%d %H:%M:%S")
 
+    local matchKey = currentMatchKey
+    if type(matchKey) ~= "string" or matchKey == "" then
+        matchKey = PvPScalpel_GenerateMatchKey()
+    end
     local match = {
-        matchKey = currentMatchKey,
+        matchKey = matchKey,
         telemetryVersion = 4.0,
         winner = lastMatchWinner,
         duration = PvPScalpel_GetResolvedMatchDurationSeconds(),
@@ -648,8 +699,12 @@ function PvPScalpel_TryCaptureMatch(attempt)
 
     local mapName = GetRealZoneText()
     local now = date("%Y-%m-%d %H:%M:%S")
+    local matchKey = currentMatchKey
+    if type(matchKey) ~= "string" or matchKey == "" then
+        matchKey = PvPScalpel_GenerateMatchKey()
+    end
     local match = {
-        matchKey = currentMatchKey,
+        matchKey = matchKey,
         telemetryVersion = 4.0,
         winner = lastMatchWinner,
         duration = PvPScalpel_GetResolvedMatchDurationSeconds(),
@@ -725,6 +780,12 @@ function PvPScalpel_TryCaptureMatch(attempt)
 
     if PvPScalpel_LastSavedMatchTime ~= now and #match.players > 0 then
         match = PvPScalpel_StopTimeline(match)
+        if not PvPScalpel_IsTable(match.localSpellCapture) then
+            AttachScoreboardOnlyReloadFallback(match)
+        end
+        if not PvPScalpel_IsTable(match.localLossOfControl) then
+            AttachScoreboardOnlyReloadFallback(match)
+        end
         if not PvPScalpel_IsTable(match.localSpellCapture) then
             PvPScalpel_FinalizeCaptureBuffer()
             return
