@@ -97,6 +97,7 @@ blitzMmrHeaderHint:Hide()
 local blitzMmrHeaderEventFrame = CreateFrame("Frame")
 local blitzMmrHeaderQueueIndex = nil
 local blitzMmrHeaderQueueStartedAt = nil
+local blitzMmrHeaderQueueEstimatedSeconds = nil
 local blitzMmrHeaderUpdateElapsed = 0
 local blitzMmrHeaderQueueState = "hidden"
 local blitzMmrHeaderFrozenQueueSeconds = nil
@@ -231,6 +232,7 @@ local function PvPScalpel_ResetBlitzHeaderRuntimeState()
     PvPScalpel_ClearBlitzAcceptWindowState()
     blitzMmrHeaderQueueIndex = nil
     blitzMmrHeaderQueueStartedAt = nil
+    blitzMmrHeaderQueueEstimatedSeconds = nil
     blitzMmrHeaderUpdateElapsed = 0
     blitzMmrHeaderQueueState = "hidden"
     blitzMmrHeaderFrozenQueueSeconds = nil
@@ -246,6 +248,7 @@ local function PvPScalpel_BeginBlitzHeaderQueueCycle(queueIndex)
     PvPScalpel_ClearBlitzAcceptWindowState()
     blitzMmrHeaderQueueIndex = queueIndex
     blitzMmrHeaderQueueStartedAt = nil
+    blitzMmrHeaderQueueEstimatedSeconds = nil
     blitzMmrHeaderUpdateElapsed = 0
     blitzMmrHeaderQueueState = "queued"
     blitzMmrHeaderFrozenQueueSeconds = nil
@@ -262,6 +265,7 @@ local function PvPScalpel_StartBlitzHeaderLinger(reason)
 
     blitzMmrHeaderQueueIndex = nil
     blitzMmrHeaderQueueStartedAt = nil
+    blitzMmrHeaderQueueEstimatedSeconds = nil
     blitzMmrHeaderQueueState = reason
     blitzMmrHeaderHasActiveQueue = false
     blitzMmrHeaderAcceptedPopupVisible = false
@@ -483,7 +487,7 @@ end
 
 local function PvPScalpel_GetQueuedBlitzInfo()
     if type(GetMaxBattlefieldID) ~= "function" or type(GetBattlefieldStatus) ~= "function" then
-        return false, nil, nil, nil, nil
+        return false, nil, nil, nil, nil, nil
     end
 
     local maxBattlefieldID = GetMaxBattlefieldID() or 0
@@ -492,6 +496,7 @@ local function PvPScalpel_GetQueuedBlitzInfo()
         if queueType == "RATEDSOLORBG" and (status == "queued" or status == "confirm") then
             local queueStartedAt = nil
             local queueElapsedSeconds = nil
+            local queueEstimatedSeconds = nil
             if type(GetBattlefieldTimeWaited) == "function" then
                 local waitedMilliseconds = GetBattlefieldTimeWaited(i)
                 if type(waitedMilliseconds) == "number" and waitedMilliseconds >= 0 then
@@ -499,11 +504,34 @@ local function PvPScalpel_GetQueuedBlitzInfo()
                     queueStartedAt = GetTime() - queueElapsedSeconds
                 end
             end
-            return true, status, queueStartedAt, queueElapsedSeconds, i
+            if type(GetBattlefieldEstimatedWaitTime) == "function" then
+                local estimatedMilliseconds = GetBattlefieldEstimatedWaitTime(i)
+                if type(estimatedMilliseconds) == "number" and estimatedMilliseconds > 0 then
+                    queueEstimatedSeconds = estimatedMilliseconds / 1000
+                end
+            end
+            return true, status, queueStartedAt, queueElapsedSeconds, i, queueEstimatedSeconds
         end
     end
 
-    return false, nil, nil, nil, nil
+    return false, nil, nil, nil, nil, nil
+end
+
+local function PvPScalpel_GetBlitzQueuedProgress(queueElapsedSeconds, queueEstimatedSeconds)
+    if type(queueElapsedSeconds) ~= "number" or queueElapsedSeconds < 0 then
+        return nil
+    end
+    if type(queueEstimatedSeconds) ~= "number" or queueEstimatedSeconds <= 0 then
+        return nil
+    end
+
+    local progress = 1 - (queueElapsedSeconds / queueEstimatedSeconds)
+    if progress < 0 then
+        progress = 0
+    elseif progress > 1 then
+        progress = 1
+    end
+    return progress
 end
 
 local function PvPScalpel_GetBlitzAcceptRemainingSeconds(queueIndex)
@@ -722,7 +750,6 @@ local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
         blitzMmrHeaderHint:Hide()
         blitzMmrHeaderFrame:EnableMouse(false)
     else
-        PvPScalpel_HideBlitzHeaderProgressFill()
         blitzMmrHeaderHint:Hide()
         blitzMmrHeaderFrame:EnableMouse(false)
         if blitzMmrHeaderRequeueCount > 0 then
@@ -734,6 +761,13 @@ local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
             blitzMmrHeaderTimer:SetText(PvPScalpel_FormatQueueTimer(GetTime() - blitzMmrHeaderQueueStartedAt))
         else
             blitzMmrHeaderTimer:SetText("00:00")
+        end
+        local queuedElapsedSeconds = type(blitzMmrHeaderQueueStartedAt) == "number" and math.max(0, GetTime() - blitzMmrHeaderQueueStartedAt) or nil
+        local queuedProgress = PvPScalpel_GetBlitzQueuedProgress(queuedElapsedSeconds, blitzMmrHeaderQueueEstimatedSeconds)
+        if type(queuedProgress) == "number" then
+            PvPScalpel_SetBlitzHeaderProgressFill(queuedProgress, 0.62, 0.62, 0.66, 0.22)
+        else
+            PvPScalpel_HideBlitzHeaderProgressFill()
         end
     end
 
@@ -750,7 +784,7 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
     -- check
     local latestBlitzSummary = PvPScalpel_GetBlitzHeaderSummary()
 
-    local queuedForBlitz, queueState, queueStartedAt, queueElapsedSeconds, queueIndex = PvPScalpel_GetQueuedBlitzInfo()
+    local queuedForBlitz, queueState, queueStartedAt, queueElapsedSeconds, queueIndex, queueEstimatedSeconds = PvPScalpel_GetQueuedBlitzInfo()
     local previouslyHadQueue = blitzMmrHeaderHasActiveQueue == true
     local previousQueueState = blitzMmrHeaderQueueState
     local previousQueueIndex = blitzMmrHeaderQueueIndex
@@ -790,6 +824,7 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
             end
             blitzMmrHeaderQueueStartedAt = GetTime() - effectiveElapsedSeconds
         end
+        blitzMmrHeaderQueueEstimatedSeconds = queueEstimatedSeconds
 
         local remainingSeconds = PvPScalpel_GetBlitzAcceptRemainingSeconds(blitzMmrHeaderQueueIndex)
         if PvPScalpel_IsPositiveNumber(remainingSeconds) then
@@ -808,11 +843,13 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
             or ((type(previousQueueIndex) == "number" and previousQueueIndex ~= queueIndex) and pendingResolution ~= true)
         if freshQueueCycle then
             PvPScalpel_BeginBlitzHeaderQueueCycle(queueIndex)
+            blitzMmrHeaderQueueEstimatedSeconds = queueEstimatedSeconds
             previousQueueState = "hidden"
             queueWasReady = false
         else
             blitzMmrHeaderHasActiveQueue = true
             blitzMmrHeaderQueueIndex = queueIndex
+            blitzMmrHeaderQueueEstimatedSeconds = queueEstimatedSeconds
             PvPScalpel_ClearBlitzHeaderLingerState()
         end
 
@@ -864,6 +901,7 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
                 end
             end
             blitzMmrHeaderQueueStartedAt = type(effectiveElapsedSeconds) == "number" and (GetTime() - effectiveElapsedSeconds) or queueStartedAt
+            blitzMmrHeaderQueueEstimatedSeconds = queueEstimatedSeconds
             blitzMmrHeaderQueueState = "queued"
         end
 
@@ -1047,5 +1085,13 @@ blitzMmrHeaderFrame:SetScript("OnUpdate", function(_, elapsed)
         return
     end
 
-    blitzMmrHeaderTimer:SetText(PvPScalpel_FormatQueueTimer(GetTime() - blitzMmrHeaderQueueStartedAt))
+    local queueElapsedSeconds = math.max(0, GetTime() - blitzMmrHeaderQueueStartedAt)
+    blitzMmrHeaderTimer:SetText(PvPScalpel_FormatQueueTimer(queueElapsedSeconds))
+
+    local queuedProgress = PvPScalpel_GetBlitzQueuedProgress(queueElapsedSeconds, blitzMmrHeaderQueueEstimatedSeconds)
+    if type(queuedProgress) == "number" then
+        PvPScalpel_SetBlitzHeaderProgressFill(queuedProgress, 0.62, 0.62, 0.66, 0.22)
+    else
+        PvPScalpel_HideBlitzHeaderProgressFill()
+    end
 end)
