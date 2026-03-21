@@ -853,25 +853,15 @@ PruneResolvedHeuristicEvents = function()
 end
 
 local function FindDebugChatFrame(windowName)
-    if not GetChatWindowInfo then
+    if not PvPScalpel_DebugWindowFind then
         return nil
     end
-
-    local expectedWindowName = windowName or DEBUG_WINDOW_NAME
-    local maxChatWindows = GetMaxChatWindows()
-    for i = 1, maxChatWindows do
-        local ok, name = pcall(GetChatWindowInfo, i)
-        if ok and name == expectedWindowName then
-            return _G["ChatFrame" .. i]
-        end
-    end
-    return nil
+    return PvPScalpel_DebugWindowFind(windowName or DEBUG_WINDOW_NAME)
 end
 
 local function CloseDebugChatFrame(windowName)
-    local chatFrame = FindDebugChatFrame(windowName)
-    if chatFrame and FCF_Close then
-        pcall(FCF_Close, chatFrame)
+    if PvPScalpel_DebugWindowClose then
+        PvPScalpel_DebugWindowClose(windowName or DEBUG_WINDOW_NAME)
     end
 end
 
@@ -883,56 +873,18 @@ local function PrepareDebugChatFrame(chatFrame, preserveMessages)
     if preserveMessages ~= true and chatFrame.Clear then
         chatFrame:Clear()
     end
-    if chatFrame.RemoveAllMessageGroups then
-        chatFrame:RemoveAllMessageGroups()
-    end
-    if chatFrame.RemoveAllChannels then
-        chatFrame:RemoveAllChannels()
-    end
-    if chatFrame.RemovePrivateMessageTarget then
-        -- Older builds of this addon registered a dummy whisper target on the debug tab.
-        -- That leaks into Blizzard's temporary whisper-window path and can taint the edit box.
-        pcall(chatFrame.RemovePrivateMessageTarget, chatFrame, "__pvps_debug__")
-    end
-
-    local chatTab = _G[chatFrame:GetName() .. "Tab"]
-    if FCF_CheckShowChatFrame then
-        pcall(FCF_CheckShowChatFrame, chatFrame)
-        if chatTab then
-            pcall(FCF_CheckShowChatFrame, chatTab)
-        end
-    end
-    if SetChatWindowShown then
-        pcall(SetChatWindowShown, chatFrame:GetID(), true)
-    end
-    if FCF_DockFrame and FCFDock_GetChatFrames and GENERAL_CHAT_DOCK and not chatFrame.isDocked then
-        local dockedFrames = FCFDock_GetChatFrames(GENERAL_CHAT_DOCK)
-        local dockIndex = 1
-        if type(dockedFrames) == "table" then
-            dockIndex = #dockedFrames + 1
-        end
-        pcall(FCF_DockFrame, chatFrame, dockIndex, true)
-    end
-    if FCF_SelectDockFrame and chatFrame.isDocked then
-        pcall(FCF_SelectDockFrame, chatFrame)
-    elseif FCFDock_SelectWindow and GENERAL_CHAT_DOCK and chatFrame.isDocked then
-        pcall(FCFDock_SelectWindow, GENERAL_CHAT_DOCK, chatFrame)
-    end
-    if FCF_FadeInChatFrame then
-        pcall(FCF_FadeInChatFrame, chatFrame)
-    end
 
     return chatFrame
 end
 
 local function OpenDebugChatFrame(windowName, preserveMessages)
-    local chatFrame = FindDebugChatFrame(windowName)
-    if not chatFrame and FCF_OpenNewWindow then
-        local ok, openedFrame = pcall(FCF_OpenNewWindow, windowName or DEBUG_WINDOW_NAME, true)
-        if ok then
-            chatFrame = openedFrame
+    if PvPScalpel_DebugWindowOpen then
+        local chatFrame = PvPScalpel_DebugWindowOpen(windowName or DEBUG_WINDOW_NAME, preserveMessages)
+        if chatFrame then
+            return chatFrame
         end
     end
+    local chatFrame = FindDebugChatFrame(windowName)
     return PrepareDebugChatFrame(chatFrame, preserveMessages)
 end
 
@@ -952,8 +904,15 @@ function PvPScalpel_ClearNamedDebugChatFrame(windowName)
     return chatFrame
 end
 
-function PvPScalpel_WriteNamedDebugChatMessage(windowName, message, r, g, b)
-    local chatFrame = OpenDebugChatFrame(windowName, true)
+function PvPScalpel_WriteNamedDebugChatMessage(windowName, message, r, g, b, openMode)
+    local chatFrame = nil
+    if openMode == "if_allowed" and PvPScalpel_DebugWindowOpenIfAllowed then
+        chatFrame = PvPScalpel_DebugWindowOpenIfAllowed(windowName, true)
+    elseif openMode == false then
+        chatFrame = FindDebugChatFrame(windowName)
+    else
+        chatFrame = OpenDebugChatFrame(windowName, true)
+    end
     if not chatFrame or not chatFrame.AddMessage then
         return false
     end
@@ -1370,11 +1329,7 @@ local function ReplayDebugHistory(chatFrame)
 end
 
 ShowDebugHistory = function()
-    local chatFrame = OpenDebugChatFrame(nil, false)
-    if not chatFrame then
-        return
-    end
-    ReplayDebugHistory(chatFrame)
+    OpenDebugChatFrame(nil, false)
 end
 
 function PvPScalpel_DebugWriteMessage(message, r, g, b)
@@ -1390,83 +1345,26 @@ function PvPScalpel_DebugWriteMessage(message, r, g, b)
 end
 
 local function AppendAttemptToChat(castEntry)
-    if PvPScalpel_Debug ~= true then
-        return
-    end
-    local chatFrame = FindDebugChatFrame()
-    if not chatFrame or not chatFrame.AddMessage then
-        return
-    end
-    local rendered = RenderAttemptChatLine(castEntry)
-    if not rendered then
-        return
-    end
-    local r, g, b = GetAttemptColor()
-    chatFrame:AddMessage(rendered, r, g, b)
 end
 
 local function AppendOutcomeToChat(castEntry)
-    if PvPScalpel_Debug ~= true then
-        return
-    end
-    local chatFrame = FindDebugChatFrame()
-    if not chatFrame or not chatFrame.AddMessage then
-        return
-    end
-    local rendered = RenderOutcomeChatLine(castEntry)
-    if not rendered then
-        return
-    end
-    local r, g, b = GetOutcomeColor(castEntry)
-    chatFrame:AddMessage(rendered, r, g, b)
 end
 
 local function AppendFilteredToChat(filteredEntry)
-    if PvPScalpel_Debug ~= true then
-        return
-    end
-    local chatFrame = FindDebugChatFrame()
-    if not chatFrame or not chatFrame.AddMessage then
-        return
-    end
-    local rendered = RenderFilteredChatLine(filteredEntry)
-    if not rendered then
-        return
-    end
-    local r, g, b = GetFilteredColor()
-    chatFrame:AddMessage(rendered, r, g, b)
 end
 
 AppendLocToChat = function(locEntry)
-    if PvPScalpel_Debug ~= true then
-        return
-    end
-    local chatFrame = FindDebugChatFrame()
-    if not chatFrame or not chatFrame.AddMessage then
-        return
-    end
-    local rendered = RenderLocChatLine(locEntry)
-    if not rendered then
-        return
-    end
-    local r, g, b = GetLocColor(locEntry)
-    chatFrame:AddMessage(rendered, r, g, b)
 end
 
 local function AppendHeuristicEntryToChat(entry)
-    if PvPScalpel_Debug ~= true then
-        return
-    end
-    local chatFrame = FindDebugChatFrame()
-    if not chatFrame or not chatFrame.AddMessage then
-        return
-    end
-    local r, g, b = GetHeuristicColor(entry)
-    chatFrame:AddMessage(tostring(entry.message or ""), r, g, b)
 end
 
 function PvPScalpel_DebugSetEnabled(enabled)
     PvPScalpel_Debug = enabled == true
+    if type(PvP_Scalpel_DebugWindowState) ~= "table" then
+        PvP_Scalpel_DebugWindowState = {}
+    end
+    PvP_Scalpel_DebugWindowState.debugEnabled = PvPScalpel_Debug == true
     if PvPScalpel_Debug then
         ShowDebugHistory()
     else
@@ -4211,7 +4109,9 @@ debugInitFrame:SetScript("OnEvent", function(_, event)
     RefreshMovementStateCache()
     RefreshTargetSnapshot()
 
-    if PvPScalpel_Debug ~= true then
+    if PvPScalpel_Debug == true then
+        PvPScalpel_DebugSetEnabled(true)
+    else
         CloseDebugChatFrame()
     end
 end)

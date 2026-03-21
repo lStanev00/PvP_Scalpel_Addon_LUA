@@ -119,8 +119,27 @@ local function PvPScalpel_DamageMeterShouldCollect()
         and PvPScalpel_IsLocalSpellCaptureActive()
 end
 
+local function PvPScalpel_DamageMeterShouldLog(message)
+    if type(message) ~= "string" or message == "" then
+        return false
+    end
+    if string.find(message, "DamageMeter: unavailable", 1, true) then
+        return true
+    end
+    if string.find(message, "DamageMeter: timed out", 1, true) then
+        return true
+    end
+    if string.find(message, "DamageMeter: snapshot skipped secret", 1, true) then
+        return true
+    end
+    if string.find(message, "DamageMeter: interrupt source ", 1, true) then
+        return true
+    end
+    return false
+end
+
 local function PvPScalpel_DamageMeterLog(message)
-    if PvPScalpel_Log then
+    if PvPScalpel_Log and PvPScalpel_DamageMeterShouldLog(message) then
         PvPScalpel_Log(message)
     end
 end

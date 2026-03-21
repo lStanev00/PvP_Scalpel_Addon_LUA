@@ -81,9 +81,20 @@ function PvPScalpel_DeepCopyPlainTable(value, seen)
 end
 
 -- Debug logging (safe: avoids printing during combat lock / restriction windows).
-if PvPScalpel_Debug == nil then
+PvP_Scalpel_DebugWindowState = PvP_Scalpel_DebugWindowState or {}
+if type(PvP_Scalpel_DebugWindowState.debugEnabled) == "boolean" then
+    PvPScalpel_Debug = PvP_Scalpel_DebugWindowState.debugEnabled
+elseif PvPScalpel_Debug == nil then
     -- Production default: keep chat quiet unless the user explicitly enables debug via /pvpsdebug.
     PvPScalpel_Debug = false
+end
+
+local function PvPScalpel_ApplySavedDebugPreference()
+    if type(PvP_Scalpel_DebugWindowState.debugEnabled) == "boolean" then
+        PvPScalpel_Debug = PvP_Scalpel_DebugWindowState.debugEnabled
+    else
+        PvPScalpel_Debug = false
+    end
 end
 
 PvPScalpel_LogQueue = PvPScalpel_LogQueue or {}
@@ -113,7 +124,12 @@ end
 local logFrame = CreateFrame("Frame")
 logFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 logFrame:RegisterEvent("PLAYER_LOGIN")
-logFrame:SetScript("OnEvent", PvPScalpel_FlushLogQueue)
+logFrame:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_LOGIN" then
+        PvPScalpel_ApplySavedDebugPreference()
+    end
+    PvPScalpel_FlushLogQueue()
+end)
 
 function PvPScalpel_Log(msg)
     if not PvPScalpel_Debug then

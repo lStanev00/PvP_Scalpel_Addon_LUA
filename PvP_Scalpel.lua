@@ -433,7 +433,11 @@ local function MaybeStartMidMatchRecoveryRetry(source)
     if not IsKnownPvpFormat(formatCheck) or IsLocalSpellCaptureRunning() then
         return
     end
-    if not HasActiveMatchRecoveryCheckpoint() and not (PvPScalpel_IsLiveMatchStarted and PvPScalpel_IsLiveMatchStarted() == true) then
+    local hasCheckpoint = HasActiveMatchRecoveryCheckpoint()
+    local canUseColdStartFallback = addonSessionColdStart == true
+        and PvPScalpel_IsLiveMatchStarted
+        and PvPScalpel_IsLiveMatchStarted() == true
+    if not hasCheckpoint and not canUseColdStartFallback then
         return
     end
     StartMidMatchRecoveryRetry(source)

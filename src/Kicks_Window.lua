@@ -1,9 +1,23 @@
-local KICKS_WINDOW_NAME = "Kicks-PvP Scalpel"
+local KICKS_WINDOW_NAME = "PvP Scalpel Debug"
 local KICK_USE_DEDUPE_WINDOW_SECONDS = 5.0
 
-local recentKickUseBySpellID = {}
-local lastObservedOwnerSuccessfulKicks = 0
-local ownerPrintedKickTotal = 0
+local function EnsureKicksWindowRuntimeStore()
+    if not PvPScalpel_EnsureCurrentMatchSessionStore then
+        return nil
+    end
+
+    local store = PvPScalpel_EnsureCurrentMatchSessionStore()
+    if type(store.kicksWindowRecentKickUseBySpellID) ~= "table" then
+        store.kicksWindowRecentKickUseBySpellID = {}
+    end
+    if type(store.kicksWindowLastObservedOwnerSuccessfulKicks) ~= "number" then
+        store.kicksWindowLastObservedOwnerSuccessfulKicks = 0
+    end
+    if type(store.kicksWindowOwnerPrintedKickTotal) ~= "number" then
+        store.kicksWindowOwnerPrintedKickTotal = 0
+    end
+    return store
+end
 
 local function GetKickWindowNow()
     if type(GetTime) == "function" then
@@ -29,20 +43,28 @@ local function ResolveKickSpellName(spellID, fallbackName)
 end
 
 local function WriteKickWindowMessage(message, r, g, b)
+    if PvPScalpel_Debug ~= true then
+        return false
+    end
+
     local renderedMessage = tostring(message)
     if type(date) == "function" then
         renderedMessage = string.format("[%s] %s", tostring(date("%H:%M:%S")), renderedMessage)
     end
     if PvPScalpel_WriteNamedDebugChatMessage then
-        return PvPScalpel_WriteNamedDebugChatMessage(KICKS_WINDOW_NAME, renderedMessage, r, g, b)
+        return PvPScalpel_WriteNamedDebugChatMessage(KICKS_WINDOW_NAME, renderedMessage, r, g, b, "if_allowed")
     end
     return false
 end
 
 function PvPScalpel_KicksWindowReset()
-    recentKickUseBySpellID = {}
-    lastObservedOwnerSuccessfulKicks = 0
-    ownerPrintedKickTotal = 0
+    local store = EnsureKicksWindowRuntimeStore()
+    if not store then
+        return
+    end
+    store.kicksWindowRecentKickUseBySpellID = {}
+    store.kicksWindowLastObservedOwnerSuccessfulKicks = 0
+    store.kicksWindowOwnerPrintedKickTotal = 0
 end
 
 function PvPScalpel_KicksWindowWipe()
@@ -57,14 +79,19 @@ function PvPScalpel_KicksWindowLogKickUsed(spellID, fallbackName)
         return false
     end
 
+    local store = EnsureKicksWindowRuntimeStore()
+    if not store then
+        return false
+    end
+
     local now = GetKickWindowNow()
-    local lastLoggedAt = recentKickUseBySpellID[spellID]
+    local lastLoggedAt = store.kicksWindowRecentKickUseBySpellID[spellID]
     if type(lastLoggedAt) == "number" and (now - lastLoggedAt) < KICK_USE_DEDUPE_WINDOW_SECONDS then
         return false
     end
 
-    recentKickUseBySpellID[spellID] = now
-    ownerPrintedKickTotal = ownerPrintedKickTotal + 1
+    store.kicksWindowRecentKickUseBySpellID[spellID] = now
+    store.kicksWindowOwnerPrintedKickTotal = store.kicksWindowOwnerPrintedKickTotal + 1
     local spellName = ResolveKickSpellName(spellID, fallbackName)
     return WriteKickWindowMessage("Used kick: " .. tostring(spellName), 0.95, 0.82, 0.40)
 end
@@ -79,23 +106,32 @@ function PvPScalpel_KicksWindowHandleOwnerSuccessTotalUpdate()
         return false
     end
 
+    local store = EnsureKicksWindowRuntimeStore()
+    if not store then
+        return false
+    end
+
     local _, currentSucceeded = PvPScalpel_DamageMeterGetInterruptTotalsForSource(ownerGUID)
     if type(currentSucceeded) ~= "number" then
         return false
     end
 
-    if currentSucceeded > lastObservedOwnerSuccessfulKicks then
-        lastObservedOwnerSuccessfulKicks = currentSucceeded
+    if currentSucceeded > store.kicksWindowLastObservedOwnerSuccessfulKicks then
+        store.kicksWindowLastObservedOwnerSuccessfulKicks = currentSucceeded
         return WriteKickWindowMessage("Successful kicks total: " .. tostring(currentSucceeded), 0.45, 1.00, 0.45)
     end
 
-    if currentSucceeded < lastObservedOwnerSuccessfulKicks then
-        lastObservedOwnerSuccessfulKicks = currentSucceeded
+    if currentSucceeded < store.kicksWindowLastObservedOwnerSuccessfulKicks then
+        store.kicksWindowLastObservedOwnerSuccessfulKicks = currentSucceeded
     end
 
     return false
 end
 
 function PvPScalpel_KicksWindowGetOwnerPrintedKickTotal()
-    return ownerPrintedKickTotal
+    local store = EnsureKicksWindowRuntimeStore()
+    if not store then
+        return 0
+    end
+    return store.kicksWindowOwnerPrintedKickTotal or 0
 end

@@ -102,6 +102,9 @@ function PvPScalpel_CreateEmptyCurrentMatchSessionStore()
         damageMeterLastSpellTotals = {},
         damageMeterLastTargetTotals = {},
         damageMeterCollectionMode = "session",
+        kicksWindowRecentKickUseBySpellID = {},
+        kicksWindowLastObservedOwnerSuccessfulKicks = 0,
+        kicksWindowOwnerPrintedKickTotal = 0,
     }
 end
 
@@ -220,6 +223,15 @@ function PvPScalpel_EnsureCurrentMatchSessionStore()
     end
     if type(store.damageMeterCollectionMode) ~= "string" or store.damageMeterCollectionMode == "" then
         store.damageMeterCollectionMode = "session"
+    end
+    if type(store.kicksWindowRecentKickUseBySpellID) ~= "table" then
+        store.kicksWindowRecentKickUseBySpellID = {}
+    end
+    if type(store.kicksWindowLastObservedOwnerSuccessfulKicks) ~= "number" then
+        store.kicksWindowLastObservedOwnerSuccessfulKicks = 0
+    end
+    if type(store.kicksWindowOwnerPrintedKickTotal) ~= "number" then
+        store.kicksWindowOwnerPrintedKickTotal = 0
     end
 
     return store
