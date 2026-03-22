@@ -626,30 +626,9 @@ local function PvPScalpel_IsLivePvpMatchActiveForHeader()
     return false
 end
 
-local function PvPScalpel_SelectBlitzRatedFinderButton()
-    if type(PVEFrame_ShowFrame) == "function" and type(ConquestFrame) == "table" then
-        pcall(PVEFrame_ShowFrame, "PVPUIFrame", ConquestFrame)
-    end
-
-    if type(ConquestFrame_SelectButton) == "function"
-        and type(ConquestFrame) == "table"
-        and type(ConquestFrame.RatedBGBlitz) == "table"
-    then
-        pcall(ConquestFrame_SelectButton, ConquestFrame.RatedBGBlitz)
-    end
-end
-
 local function PvPScalpel_OpenBlitzRatedFinder()
-    if type(PVEFrame_ShowFrame) == "function" and type(ConquestFrame) == "table" then
-        pcall(PVEFrame_ShowFrame, "PVPUIFrame", ConquestFrame)
-    elseif type(TogglePVPUI) == "function" then
+    if type(TogglePVPUI) == "function" then
         pcall(TogglePVPUI)
-    end
-
-    PvPScalpel_SelectBlitzRatedFinderButton()
-
-    if type(C_Timer) == "table" and type(C_Timer.After) == "function" then
-        C_Timer.After(0, PvPScalpel_SelectBlitzRatedFinderButton)
     end
 end
 
