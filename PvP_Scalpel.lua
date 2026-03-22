@@ -511,7 +511,9 @@ function PvPScalpel_HandleZoneLifecycle()
         if PvPScalpel_SyncMatchStateToCurrentMatchSession then
             PvPScalpel_SyncMatchStateToCurrentMatchSession()
         end
-        PvPScalpel_Log(tostring(currentMatchKey))
+        if type(currentMatchKey) == "string" and currentMatchKey ~= "" then
+            PvPScalpel_Log("Match key: " .. currentMatchKey)
+        end
         PvPScalpel_Log(("PvPScalpel: Tracking ON (%s)"):format(formatCheck))
     end
 

@@ -132,7 +132,7 @@ local function PvPScalpel_DamageMeterShouldLog(message)
     if string.find(message, "DamageMeter: snapshot skipped secret", 1, true) then
         return true
     end
-    if string.find(message, "DamageMeter: interrupt source ", 1, true) then
+    if string.find(message, "DamageMeter: interrupts without spellID detail", 1, true) then
         return true
     end
     return false
@@ -766,6 +766,8 @@ local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kin
         return false
     end
 
+    local totalMissingInterruptSpellDetails = 0
+
     for i = 1, #session.combatSources do
         local source = session.combatSources[i]
         if source then
@@ -812,13 +814,8 @@ local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kin
                                         bySource[UNKNOWN_INTERRUPT_SPELL_ID] = missingFromSpellBreakdown
                                     end
                                 end
-                                if PvPScalpel_Debug then
-                                    PvPScalpel_DamageMeterLog(
-                                        "DamageMeter: interrupt source " .. tostring(sourceGUID)
-                                            .. " has " .. tostring(missingFromSpellBreakdown)
-                                            .. " interrupts without spellID detail"
-                                    )
-                                end
+                                totalMissingInterruptSpellDetails =
+                                    totalMissingInterruptSpellDetails + missingFromSpellBreakdown
                             end
                         end
                         local successfulInterrupts = totalCasts
@@ -843,6 +840,12 @@ local function PvPScalpel_DamageMeterCollectType(sessionId, damageMeterType, kin
                 end
             end
         end
+    end
+
+    if PvPScalpel_Debug and kind == "interrupts" and totalMissingInterruptSpellDetails > 0 then
+        PvPScalpel_DamageMeterLog(
+            "DamageMeter: interrupts without spellID detail: " .. tostring(totalMissingInterruptSpellDetails)
+        )
     end
 
     return true

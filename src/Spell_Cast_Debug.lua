@@ -1370,6 +1370,9 @@ function PvPScalpel_DebugSetEnabled(enabled)
     else
         CloseDebugChatFrame()
     end
+    if PvPScalpel_KicksWindowSyncImmediateSuccessObserver then
+        PvPScalpel_KicksWindowSyncImmediateSuccessObserver()
+    end
 end
 
 function RecordResolvedHeuristicEntry(subkind, dedupeKey, message)
@@ -3876,6 +3879,9 @@ function PvPScalpel_StartLocalSpellCaptureSession()
     if PvPScalpel_Debug == true then
         ShowDebugHistory()
     end
+    if PvPScalpel_KicksWindowSyncImmediateSuccessObserver then
+        PvPScalpel_KicksWindowSyncImmediateSuccessObserver()
+    end
 end
 
 function PvPScalpel_StopLocalSpellCaptureSession(match)
@@ -3889,6 +3895,9 @@ function PvPScalpel_StopLocalSpellCaptureSession(match)
 
     session.active = false
     session.startedAt = nil
+    if PvPScalpel_KicksWindowSyncImmediateSuccessObserver then
+        PvPScalpel_KicksWindowSyncImmediateSuccessObserver()
+    end
     ResetRuntimeCaptureState()
     ResetSessionCollections()
 
