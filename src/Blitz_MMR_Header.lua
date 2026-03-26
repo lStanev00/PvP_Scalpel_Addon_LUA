@@ -2,14 +2,17 @@ local BLITZ_LINGER_SECONDS = 30
 local BLITZ_ACCEPT_WINDOW_RESYNC_SECONDS = 0.5
 local BLITZ_QUEUE_RESOLUTION_GRACE_SECONDS = 1.75
 local BLITZ_RATED_BRACKET_INDEX = 9
+local BLITZ_HEADER_LAYOUT_KEY = "PvP Scalpel Blitz Header"
 
 PvP_Scalpel_BlitzMmrCache = PvP_Scalpel_BlitzMmrCache or {}
 
 local blitzMmrHeaderFrame = CreateFrame("Frame", "PvPScalpelBlitzMmrHeader", UIParent)
 blitzMmrHeaderFrame:SetFrameStrata("HIGH")
-blitzMmrHeaderFrame:SetPoint("TOP", UIParent, "TOP", 0, -18)
+blitzMmrHeaderFrame:SetPoint("TOP", UIParent, "TOP", 0, -38)
 blitzMmrHeaderFrame:SetSize(392, 56)
 blitzMmrHeaderFrame:EnableMouse(false)
+blitzMmrHeaderFrame:SetClampedToScreen(true)
+blitzMmrHeaderFrame:SetMovable(true)
 blitzMmrHeaderFrame:Hide()
 
 local blitzMmrHeaderBackground = blitzMmrHeaderFrame:CreateTexture(nil, "BACKGROUND")
@@ -115,6 +118,69 @@ local blitzMmrHeaderAcceptWindowLastSyncAt = nil
 local blitzMmrHeaderPendingQueueResolution = false
 local blitzMmrHeaderPendingQueueResolutionStartedAt = nil
 local blitzMmrHeaderPendingQueueResolutionFromState = nil
+local blitzMmrHeaderScanDisplayedProgress = nil
+local blitzMmrHeaderDragging = false
+local blitzMmrHeaderSuppressNextClick = false
+local blitzMmrHeaderWasInLiveMatch = false
+local blitzMmrHeaderPendingPostMatchSummary = nil
+local blitzMmrHeaderPendingPostMatchToken = nil
+local blitzMmrHeaderAwaitingPostMatchSummary = false
+local blitzMmrHeaderPostMatchSummary = nil
+local blitzMmrHeaderPostMatchToken = nil
+local blitzMmrHeaderDismissQueue = false
+local blitzMmrHeaderDismissScan = false
+local blitzMmrHeaderDismissLingerToken = nil
+local blitzMmrHeaderDismissPostMatchToken = nil
+local blitzMmrHeaderContextMenu = nil
+
+local function PvPScalpel_EnsureBlitzHeaderStateStore()
+    if type(PvP_Scalpel_DebugWindowState) ~= "table" then
+        PvP_Scalpel_DebugWindowState = {}
+    end
+    return PvP_Scalpel_DebugWindowState
+end
+
+local function PvPScalpel_GetStoredBlitzHeaderLayout()
+    local store = PvPScalpel_EnsureBlitzHeaderStateStore()
+    local layout = store[BLITZ_HEADER_LAYOUT_KEY]
+    if type(layout) ~= "table" then
+        return nil
+    end
+    return layout
+end
+
+local function PvPScalpel_SaveBlitzHeaderLayout()
+    local point, _, relativePoint, xOfs, yOfs = blitzMmrHeaderFrame:GetPoint(1)
+    local store = PvPScalpel_EnsureBlitzHeaderStateStore()
+    store[BLITZ_HEADER_LAYOUT_KEY] = {
+        point = type(point) == "string" and point or "TOP",
+        relativePoint = type(relativePoint) == "string" and relativePoint or "TOP",
+        x = type(xOfs) == "number" and xOfs or 0,
+        y = type(yOfs) == "number" and yOfs or -38,
+    }
+end
+
+local function PvPScalpel_ClearBlitzHeaderLayout()
+    local store = PvPScalpel_EnsureBlitzHeaderStateStore()
+    store[BLITZ_HEADER_LAYOUT_KEY] = nil
+end
+
+local function PvPScalpel_ApplyBlitzHeaderLayout()
+    local storedLayout = PvPScalpel_GetStoredBlitzHeaderLayout()
+    blitzMmrHeaderFrame:ClearAllPoints()
+    if type(storedLayout) == "table" then
+        blitzMmrHeaderFrame:SetPoint(
+            type(storedLayout.point) == "string" and storedLayout.point or "TOP",
+            UIParent,
+            type(storedLayout.relativePoint) == "string" and storedLayout.relativePoint or "TOP",
+            type(storedLayout.x) == "number" and storedLayout.x or 0,
+            type(storedLayout.y) == "number" and storedLayout.y or -38
+        )
+        return
+    end
+
+    blitzMmrHeaderFrame:SetPoint("TOP", UIParent, "TOP", 0, -38)
+end
 
 local function PvPScalpel_IsPositiveNumber(value)
     return type(value) == "number" and value > 0
@@ -188,9 +254,56 @@ local function PvPScalpel_SetBlitzHeaderProgressFill(progress, red, green, blue,
     end
 
     local maxWidth = math.max(0, (blitzMmrHeaderFrame:GetWidth() or 0) - 4)
+    blitzMmrHeaderProgressFill:ClearAllPoints()
+    blitzMmrHeaderProgressFill:SetPoint("TOPLEFT", blitzMmrHeaderFrame, "TOPLEFT", 3, -1)
+    blitzMmrHeaderProgressFill:SetPoint("BOTTOMLEFT", blitzMmrHeaderFrame, "BOTTOMLEFT", 3, 1)
     blitzMmrHeaderProgressFill:SetColorTexture(red, green, blue, alpha)
     blitzMmrHeaderProgressFill:SetWidth(maxWidth * progress)
     blitzMmrHeaderProgressFill:Show()
+end
+
+local function PvPScalpel_SetBlitzHeaderQueuedStyleFill(progress)
+    PvPScalpel_SetBlitzHeaderProgressFill(progress, 0.62, 0.62, 0.66, 0.22)
+end
+
+local function PvPScalpel_SetBlitzHeaderReverseProgressFill(progress, red, green, blue, alpha)
+    if type(progress) ~= "number" then
+        PvPScalpel_HideBlitzHeaderProgressFill()
+        return
+    end
+
+    progress = math.max(0, math.min(1, progress))
+    local remaining = 1 - progress
+    if remaining <= 0 then
+        PvPScalpel_HideBlitzHeaderProgressFill()
+        return
+    end
+
+    local maxWidth = math.max(0, (blitzMmrHeaderFrame:GetWidth() or 0) - 4)
+    blitzMmrHeaderProgressFill:ClearAllPoints()
+    blitzMmrHeaderProgressFill:SetPoint("TOPLEFT", blitzMmrHeaderFrame, "TOPLEFT", 3, -1)
+    blitzMmrHeaderProgressFill:SetPoint("BOTTOMLEFT", blitzMmrHeaderFrame, "BOTTOMLEFT", 3, 1)
+    blitzMmrHeaderProgressFill:SetColorTexture(red, green, blue, alpha)
+    blitzMmrHeaderProgressFill:SetWidth(maxWidth * remaining)
+    blitzMmrHeaderProgressFill:Show()
+end
+
+local function PvPScalpel_GetBlitzLobbyScanProgress(snapshot)
+    local expected = type(snapshot) == "table" and type(snapshot.expectedLocalCount) == "number" and snapshot.expectedLocalCount or 0
+    local resolved = type(snapshot) == "table" and type(snapshot.resolvedCount) == "number" and snapshot.resolvedCount or 0
+    if expected <= 0 then
+        return 0
+    end
+    return math.max(0, math.min(resolved, expected)) / expected
+end
+
+local function PvPScalpel_ApplyBlitzLobbyScanProgressFill(scanState, progress)
+    if scanState == "FAILED" then
+        PvPScalpel_SetBlitzHeaderReverseProgressFill(progress, 0.72, 0.20, 0.20, 0.30)
+        return
+    end
+
+    PvPScalpel_SetBlitzHeaderReverseProgressFill(progress, 0.20, 0.62, 0.32, 0.28)
 end
 
 local function PvPScalpel_ClearBlitzHeaderVisuals()
@@ -203,6 +316,7 @@ local function PvPScalpel_ClearBlitzHeaderVisuals()
     blitzMmrHeaderStatusText:Hide()
     blitzMmrHeaderHint:Hide()
     blitzMmrHeaderFrame:EnableMouse(false)
+    blitzMmrHeaderScanDisplayedProgress = nil
     PvPScalpel_HideBlitzHeaderProgressFill()
     blitzMmrHeaderFrame:Hide()
 end
@@ -210,6 +324,8 @@ end
 local function PvPScalpel_ClearBlitzHeaderLingerState()
     blitzMmrHeaderLingerHideAt = nil
     blitzMmrHeaderLingerReason = nil
+    blitzMmrHeaderPostMatchSummary = nil
+    blitzMmrHeaderPostMatchToken = nil
 end
 
 local function PvPScalpel_ClearBlitzPendingQueueResolution()
@@ -256,10 +372,11 @@ local function PvPScalpel_BeginBlitzHeaderQueueCycle(queueIndex)
     blitzMmrHeaderPopCount = 0
     blitzMmrHeaderHasActiveQueue = true
     blitzMmrHeaderAwaitingPopResolution = false
+    blitzMmrHeaderDismissQueue = false
 end
 
-local function PvPScalpel_StartBlitzHeaderLinger(reason)
-    if reason ~= "canceled" and reason ~= "dodged" then
+local function PvPScalpel_StartBlitzHeaderLinger(reason, summary, token)
+    if reason ~= "canceled" and reason ~= "dodged" and reason ~= "postmatch" then
         return
     end
 
@@ -275,19 +392,41 @@ local function PvPScalpel_StartBlitzHeaderLinger(reason)
     blitzMmrHeaderAcceptWindowLastSyncAt = nil
     blitzMmrHeaderLingerReason = reason
     blitzMmrHeaderLingerHideAt = GetTime() + BLITZ_LINGER_SECONDS
+    if reason == "postmatch" then
+        blitzMmrHeaderPostMatchSummary = type(summary) == "table" and summary or nil
+        blitzMmrHeaderPostMatchToken = type(token) == "string" and token or nil
+        blitzMmrHeaderPendingPostMatchSummary = nil
+        blitzMmrHeaderPendingPostMatchToken = nil
+        blitzMmrHeaderAwaitingPostMatchSummary = false
+    else
+        blitzMmrHeaderPostMatchSummary = nil
+        blitzMmrHeaderPostMatchToken = nil
+    end
 end
 
 local function PvPScalpel_IsBlitzHeaderLingering()
-    return (blitzMmrHeaderLingerReason == "canceled" or blitzMmrHeaderLingerReason == "dodged")
+    return (blitzMmrHeaderLingerReason == "canceled"
+        or blitzMmrHeaderLingerReason == "dodged"
+        or blitzMmrHeaderLingerReason == "postmatch")
         and type(blitzMmrHeaderLingerHideAt) == "number"
 end
 
+local function PvPScalpel_IsBlitzHeaderPostMatchLingering()
+    return blitzMmrHeaderLingerReason == "postmatch"
+        and type(blitzMmrHeaderLingerHideAt) == "number"
+        and type(blitzMmrHeaderPostMatchSummary) == "table"
+end
+
 local function PvPScalpel_GetBlitzHeaderLingerStatusText()
-    if blitzMmrHeaderLingerReason ~= "canceled" and blitzMmrHeaderLingerReason ~= "dodged" then
-        return nil
+    if blitzMmrHeaderLingerReason == "postmatch" then
+        return "RESULT"
     end
 
-    return string.upper(blitzMmrHeaderLingerReason)
+    if blitzMmrHeaderLingerReason == "canceled" or blitzMmrHeaderLingerReason == "dodged" then
+        return string.upper(blitzMmrHeaderLingerReason)
+    end
+
+    return nil
 end
 
 local function PvPScalpel_StartBlitzPendingQueueResolution(fromState)
@@ -417,6 +556,23 @@ local function PvPScalpel_BuildBlitzMmrSummary(match)
         delta = delta,
         hasValidDelta = hasValidDelta,
     }
+end
+
+local function PvPScalpel_GetBlitzSummaryToken(summary)
+    if type(summary) ~= "table" then
+        return nil
+    end
+
+    local matchKey = type(summary.matchKey) == "string" and summary.matchKey or ""
+    if matchKey ~= "" then
+        return "match:" .. matchKey
+    end
+
+    return table.concat({
+        tostring(summary.timestamp or ""),
+        tostring(summary.currentMMR or ""),
+        tostring(summary.delta or ""),
+    }, "|")
 end
 
 local function PvPScalpel_GetBlitzBracketRating()
@@ -599,13 +755,6 @@ local function PvPScalpel_GetBlitzInviteProgress()
 end
 
 local function PvPScalpel_IsLivePvpMatchActiveForHeader()
-    if type(IsInInstance) == "function" then
-        local okInstance, isInstance, instanceType = pcall(IsInInstance)
-        if okInstance and isInstance == true and (instanceType == "pvp" or instanceType == "arena") then
-            return true
-        end
-    end
-
     if C_PvP and C_PvP.GetActiveMatchState and Enum and Enum.PvPMatchState and Enum.PvPMatchState.Engaged then
         local okState, state = pcall(C_PvP.GetActiveMatchState)
         if okState and type(state) == "number" then
@@ -626,28 +775,244 @@ local function PvPScalpel_IsLivePvpMatchActiveForHeader()
     return false
 end
 
+local function PvPScalpel_GetBlitzLobbyScanSnapshotSafe()
+    if type(PvPScalpel_GetBlitzLobbyScanSnapshot) ~= "function" then
+        return nil
+    end
+    return PvPScalpel_GetBlitzLobbyScanSnapshot()
+end
+
+local function PvPScalpel_IsBlitzLobbyScanDisplayed(snapshot)
+    return type(snapshot) == "table" and snapshot.display == true
+end
+
+local function PvPScalpel_IsBlitzLobbyScanCopyReady(snapshot)
+    return PvPScalpel_IsBlitzLobbyScanDisplayed(snapshot)
+        and (snapshot.scanState == "DONE" or snapshot.scanState == "MOCK")
+        and type(snapshot.buffer) == "string"
+        and snapshot.buffer ~= ""
+end
+
+local function PvPScalpel_FormatBlitzLobbyScanProgress(snapshot)
+    local expected = type(snapshot) == "table" and type(snapshot.expectedLocalCount) == "number" and snapshot.expectedLocalCount or 0
+    local resolved = type(snapshot) == "table" and type(snapshot.resolvedCount) == "number" and snapshot.resolvedCount or 0
+    if expected < 0 then
+        expected = 0
+    end
+    resolved = math.max(0, math.min(resolved, expected > 0 and expected or resolved))
+    return string.format("%d / %d Ready", resolved, expected)
+end
+
+local function PvPScalpel_ApplyBlitzLobbyScanHeaderDisplay(snapshot)
+    if not PvPScalpel_IsBlitzLobbyScanDisplayed(snapshot) then
+        return false
+    end
+
+    local scanState = type(snapshot.scanState) == "string" and snapshot.scanState or "LOADING"
+    local formatLabel = type(snapshot.format) == "string" and string.upper(snapshot.format) or "BATTLEGROUND BLITZ"
+    local targetProgress = PvPScalpel_GetBlitzLobbyScanProgress(snapshot)
+
+    blitzMmrHeaderLabel:SetText(formatLabel)
+    blitzMmrHeaderSuffix:SetText("")
+    blitzMmrHeaderDelta:SetText("")
+    blitzMmrHeaderStatusBackground:Show()
+    blitzMmrHeaderStatusText:Show()
+    blitzMmrHeaderTimer:Show()
+
+    if type(blitzMmrHeaderScanDisplayedProgress) ~= "number" then
+        blitzMmrHeaderScanDisplayedProgress = 0
+    end
+
+    if scanState == "DONE" or scanState == "MOCK" then
+        blitzMmrHeaderValue:SetText("Lobby Scan")
+        PvPScalpel_SetBlitzHeaderStatus("READY", 0.70, 1.00, 0.80, 0.10, 0.33, 0.18, 0.92)
+        blitzMmrHeaderHint:SetText("Click to copy lobby scan")
+        blitzMmrHeaderHint:SetTextColor(0.94, 0.80, 0.66)
+        blitzMmrHeaderHint:Show()
+    elseif scanState == "FAILED" then
+        blitzMmrHeaderValue:SetText("Lobby Scan Failed")
+        PvPScalpel_SetBlitzHeaderStatus("FAILED", 1.00, 0.82, 0.82, 0.42, 0.08, 0.08, 0.92)
+        blitzMmrHeaderHint:SetText("Scan failed: " .. tostring(snapshot.failureReason or "unknown"))
+        blitzMmrHeaderHint:SetTextColor(1.00, 0.78, 0.78)
+        blitzMmrHeaderHint:Show()
+    else
+        blitzMmrHeaderValue:SetText("Scanning Lobby")
+        PvPScalpel_SetBlitzHeaderStatus("LOADING", 0.86, 0.96, 1.00, 0.14, 0.23, 0.36, 0.92)
+        blitzMmrHeaderHint:Hide()
+    end
+
+    if blitzMmrHeaderScanDisplayedProgress > targetProgress then
+        blitzMmrHeaderScanDisplayedProgress = targetProgress
+    end
+    PvPScalpel_ApplyBlitzLobbyScanProgressFill(scanState, blitzMmrHeaderScanDisplayedProgress)
+    blitzMmrHeaderTimer:SetText(PvPScalpel_FormatBlitzLobbyScanProgress(snapshot))
+    blitzMmrHeaderFrame:EnableMouse(true)
+    blitzMmrHeaderFrame:Show()
+    return true
+end
+
 local function PvPScalpel_OpenBlitzRatedFinder()
     if type(TogglePVPUI) == "function" then
         pcall(TogglePVPUI)
     end
 end
 
+local function PvPScalpel_GetCurrentBlitzHeaderLingerToken()
+    if blitzMmrHeaderLingerReason == "postmatch" then
+        return blitzMmrHeaderPostMatchToken
+    end
+
+    if type(blitzMmrHeaderLingerReason) ~= "string" or type(blitzMmrHeaderLingerHideAt) ~= "number" then
+        return nil
+    end
+
+    return string.format("%s|%.3f", blitzMmrHeaderLingerReason, blitzMmrHeaderLingerHideAt)
+end
+
+local function PvPScalpel_GetBlitzHeaderActionHint(snapshot)
+    if PvPScalpel_IsBlitzLobbyScanCopyReady(snapshot) then
+        return "Left-click to copy lobby scan"
+    end
+
+    if PvPScalpel_IsBlitzHeaderLingering() then
+        return "Left-click to open PvP Rated Finder"
+    end
+
+    return nil
+end
+
+local function PvPScalpel_ShowBlitzHeaderTooltip()
+    if not GameTooltip or not blitzMmrHeaderFrame:IsShown() then
+        return
+    end
+
+    local lobbyScanSnapshot = PvPScalpel_GetBlitzLobbyScanSnapshotSafe()
+    GameTooltip:SetOwner(blitzMmrHeaderFrame, "ANCHOR_BOTTOMRIGHT")
+    GameTooltip:ClearLines()
+    GameTooltip:AddLine("PvP Scalpel", 1.00, 0.92, 0.52)
+    local actionHint = PvPScalpel_GetBlitzHeaderActionHint(lobbyScanSnapshot)
+    if type(actionHint) == "string" and actionHint ~= "" then
+        GameTooltip:AddLine(actionHint, 0.94, 0.80, 0.66)
+    end
+    GameTooltip:AddLine("Shift+Left drag to move", 0.79, 0.80, 0.84)
+    GameTooltip:AddLine("Right-click for banner options", 0.79, 0.80, 0.84)
+    GameTooltip:Show()
+end
+
+local function PvPScalpel_DismissCurrentBlitzHeaderState()
+    local lobbyScanSnapshot = PvPScalpel_GetBlitzLobbyScanSnapshotSafe()
+    if PvPScalpel_IsBlitzLobbyScanDisplayed(lobbyScanSnapshot) then
+        blitzMmrHeaderDismissScan = true
+    elseif PvPScalpel_IsBlitzHeaderPostMatchLingering() then
+        blitzMmrHeaderDismissPostMatchToken = blitzMmrHeaderPostMatchToken
+    elseif PvPScalpel_IsBlitzHeaderLingering() then
+        blitzMmrHeaderDismissLingerToken = PvPScalpel_GetCurrentBlitzHeaderLingerToken()
+    else
+        blitzMmrHeaderDismissQueue = true
+    end
+
+    PvPScalpel_ClearBlitzHeaderVisuals()
+end
+
+local function PvPScalpel_GetBlitzHeaderContextMenu()
+    if type(blitzMmrHeaderContextMenu) == "table" then
+        return blitzMmrHeaderContextMenu
+    end
+
+    local menu = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    menu:SetFrameStrata("DIALOG")
+    menu:SetFrameLevel(blitzMmrHeaderFrame:GetFrameLevel() + 20)
+    menu:SetSize(150, 58)
+    menu:SetClampedToScreen(true)
+    menu:Hide()
+
+    if type(menu.SetBackdrop) == "function" then
+        menu:SetBackdrop({
+            bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true,
+            tileSize = 16,
+            edgeSize = 14,
+            insets = { left = 3, right = 3, top = 3, bottom = 3 },
+        })
+        menu:SetBackdropColor(0.03, 0.04, 0.05, 0.94)
+        menu:SetBackdropBorderColor(0.76, 0.61, 0.25, 0.70)
+    end
+
+    local closeButton = CreateFrame("Button", nil, menu, "UIPanelButtonTemplate")
+    closeButton:SetPoint("TOPLEFT", menu, "TOPLEFT", 10, -8)
+    closeButton:SetPoint("TOPRIGHT", menu, "TOPRIGHT", -10, -8)
+    closeButton:SetHeight(20)
+    closeButton:SetText("Close banner")
+    closeButton:SetScript("OnClick", function()
+        menu:Hide()
+        PvPScalpel_DismissCurrentBlitzHeaderState()
+    end)
+
+    local resetButton = CreateFrame("Button", nil, menu, "UIPanelButtonTemplate")
+    resetButton:SetPoint("TOPLEFT", closeButton, "BOTTOMLEFT", 0, -6)
+    resetButton:SetPoint("TOPRIGHT", closeButton, "BOTTOMRIGHT", 0, -6)
+    resetButton:SetHeight(20)
+    resetButton:SetText("Reset position")
+    resetButton:SetScript("OnClick", function()
+        menu:Hide()
+        PvPScalpel_ClearBlitzHeaderLayout()
+        PvPScalpel_ApplyBlitzHeaderLayout()
+    end)
+
+    blitzMmrHeaderContextMenu = menu
+    return menu
+end
+
+local function PvPScalpel_CloseBlitzHeaderContextMenu()
+    if type(blitzMmrHeaderContextMenu) == "table" then
+        blitzMmrHeaderContextMenu:Hide()
+    end
+end
+
+local function PvPScalpel_OpenBlitzHeaderContextMenu()
+    local menu = PvPScalpel_GetBlitzHeaderContextMenu()
+    if menu:IsShown() then
+        menu:Hide()
+        return
+    end
+
+    menu:ClearAllPoints()
+    menu:SetPoint("TOPRIGHT", blitzMmrHeaderFrame, "BOTTOMRIGHT", 0, -4)
+    menu:Show()
+end
+
 local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
+    local lobbyScanSnapshot = PvPScalpel_GetBlitzLobbyScanSnapshotSafe()
     local lingering = PvPScalpel_IsBlitzHeaderLingering()
     local accepted = blitzMmrHeaderAcceptedPopupVisible == true
         or (blitzMmrHeaderPendingQueueResolution == true and blitzMmrHeaderQueueState == "accepted")
     local popped = blitzMmrHeaderQueueState == "confirm"
-    local displayActive = lingering
+    local displayActive = PvPScalpel_IsBlitzLobbyScanDisplayed(lobbyScanSnapshot)
+        or lingering
         or accepted
         or popped
         or blitzMmrHeaderHasActiveQueue == true
         or blitzMmrHeaderPendingQueueResolution == true
-    if type(summary) ~= "table" or not displayActive then
+    if not displayActive then
+        PvPScalpel_ClearBlitzHeaderVisuals()
+        return
+    end
+
+    if PvPScalpel_ApplyBlitzLobbyScanHeaderDisplay(lobbyScanSnapshot) then
+        return
+    end
+
+    if type(summary) ~= "table" then
         PvPScalpel_ClearBlitzHeaderVisuals()
         return
     end
 
     blitzMmrHeaderLabel:SetText("BATTLEGROUND BLITZ")
+    if PvPScalpel_IsBlitzHeaderPostMatchLingering() and type(blitzMmrHeaderPostMatchSummary) == "table" then
+        summary = blitzMmrHeaderPostMatchSummary
+    end
+
     blitzMmrHeaderValue:SetText(PvPScalpel_FormatMmrValue(summary.currentMMR))
     blitzMmrHeaderSuffix:SetText(type(summary.suffixText) == "string" and summary.suffixText or "MMR")
 
@@ -679,7 +1044,9 @@ local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
 
     if lingering then
         local statusText = PvPScalpel_GetBlitzHeaderLingerStatusText() or "CANCELED"
-        if blitzMmrHeaderLingerReason == "dodged" then
+        if blitzMmrHeaderLingerReason == "postmatch" then
+            PvPScalpel_SetBlitzHeaderStatus(statusText, 0.70, 1.00, 0.80, 0.10, 0.33, 0.18, 0.92)
+        elseif blitzMmrHeaderLingerReason == "dodged" then
             PvPScalpel_SetBlitzHeaderStatus(statusText, 1.00, 0.84, 0.84, 0.42, 0.08, 0.08, 0.92)
         else
             PvPScalpel_SetBlitzHeaderStatus(statusText, 1.00, 0.82, 0.72, 0.44, 0.11, 0.08, 0.92)
@@ -688,7 +1055,6 @@ local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
         blitzMmrHeaderHint:SetText("Click to open PvP Rated Finder")
         blitzMmrHeaderHint:SetTextColor(0.94, 0.80, 0.66)
         blitzMmrHeaderHint:Show()
-        blitzMmrHeaderFrame:EnableMouse(true)
         PvPScalpel_HideBlitzHeaderProgressFill()
     elseif accepted or popped then
         local remainingSeconds, progress = PvPScalpel_GetBlitzInviteProgress()
@@ -727,10 +1093,8 @@ local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
         end
 
         blitzMmrHeaderHint:Hide()
-        blitzMmrHeaderFrame:EnableMouse(false)
     else
         blitzMmrHeaderHint:Hide()
-        blitzMmrHeaderFrame:EnableMouse(false)
         if blitzMmrHeaderRequeueCount > 0 then
             PvPScalpel_SetBlitzHeaderStatus("REQUEUED (" .. tostring(blitzMmrHeaderRequeueCount) .. ")", 0.86, 0.96, 1.00, 0.14, 0.23, 0.36, 0.92)
         else
@@ -744,24 +1108,36 @@ local function PvPScalpel_UpdateBlitzMmrHeaderDisplay(summary)
         local queuedElapsedSeconds = type(blitzMmrHeaderQueueStartedAt) == "number" and math.max(0, GetTime() - blitzMmrHeaderQueueStartedAt) or nil
         local queuedProgress = PvPScalpel_GetBlitzQueuedProgress(queuedElapsedSeconds, blitzMmrHeaderQueueEstimatedSeconds)
         if type(queuedProgress) == "number" then
-            PvPScalpel_SetBlitzHeaderProgressFill(queuedProgress, 0.62, 0.62, 0.66, 0.22)
+            PvPScalpel_SetBlitzHeaderQueuedStyleFill(queuedProgress)
         else
             PvPScalpel_HideBlitzHeaderProgressFill()
         end
     end
 
+    blitzMmrHeaderFrame:EnableMouse(true)
     blitzMmrHeaderFrame:Show()
 end
 
 function PvPScalpel_BlitzMmrHeaderRefresh()
-    if PvPScalpel_IsLivePvpMatchActiveForHeader() then
+    local liveMatchActive = PvPScalpel_IsLivePvpMatchActiveForHeader()
+    if liveMatchActive then
+        blitzMmrHeaderWasInLiveMatch = true
+        blitzMmrHeaderDismissScan = false
+        blitzMmrHeaderDismissQueue = false
         PvPScalpel_ResetBlitzHeaderRuntimeState()
         PvPScalpel_ClearBlitzHeaderVisuals()
         return
     end
 
+    local justExitedLiveMatch = blitzMmrHeaderWasInLiveMatch == true
+    blitzMmrHeaderWasInLiveMatch = false
+
     -- check
     local latestBlitzSummary = PvPScalpel_GetBlitzHeaderSummary()
+    local lobbyScanSnapshot = PvPScalpel_GetBlitzLobbyScanSnapshotSafe()
+    if not PvPScalpel_IsBlitzLobbyScanDisplayed(lobbyScanSnapshot) then
+        blitzMmrHeaderDismissScan = false
+    end
 
     local queuedForBlitz, queueState, queueStartedAt, queueElapsedSeconds, queueIndex, queueEstimatedSeconds = PvPScalpel_GetQueuedBlitzInfo()
     local previouslyHadQueue = blitzMmrHeaderHasActiveQueue == true
@@ -773,6 +1149,77 @@ function PvPScalpel_BlitzMmrHeaderRefresh()
     local pendingGraceExpired = pendingResolution
         and type(blitzMmrHeaderPendingQueueResolutionStartedAt) == "number"
         and (GetTime() - blitzMmrHeaderPendingQueueResolutionStartedAt) >= BLITZ_QUEUE_RESOLUTION_GRACE_SECONDS
+
+    if not queuedForBlitz
+        and blitzMmrHeaderAcceptedPopupVisible ~= true
+        and blitzMmrHeaderQueueState ~= "confirm"
+        and pendingResolution ~= true
+    then
+        blitzMmrHeaderDismissQueue = false
+    end
+
+    if not PvPScalpel_IsBlitzHeaderLingering() then
+        blitzMmrHeaderDismissLingerToken = nil
+    end
+    if not PvPScalpel_IsBlitzHeaderPostMatchLingering() then
+        blitzMmrHeaderDismissPostMatchToken = nil
+    end
+
+    if justExitedLiveMatch then
+        if type(blitzMmrHeaderPendingPostMatchSummary) == "table"
+            and type(blitzMmrHeaderPendingPostMatchToken) == "string"
+            and blitzMmrHeaderPendingPostMatchToken ~= blitzMmrHeaderDismissPostMatchToken
+        then
+            PvPScalpel_StartBlitzHeaderLinger("postmatch", blitzMmrHeaderPendingPostMatchSummary, blitzMmrHeaderPendingPostMatchToken)
+        else
+            blitzMmrHeaderAwaitingPostMatchSummary = true
+        end
+    end
+
+    if blitzMmrHeaderAwaitingPostMatchSummary == true
+        and type(blitzMmrHeaderPendingPostMatchSummary) == "table"
+        and type(blitzMmrHeaderPendingPostMatchToken) == "string"
+        and blitzMmrHeaderPendingPostMatchToken ~= blitzMmrHeaderDismissPostMatchToken
+    then
+        PvPScalpel_StartBlitzHeaderLinger("postmatch", blitzMmrHeaderPendingPostMatchSummary, blitzMmrHeaderPendingPostMatchToken)
+    end
+
+    if PvPScalpel_IsBlitzHeaderPostMatchLingering()
+        and blitzMmrHeaderDismissPostMatchToken == blitzMmrHeaderPostMatchToken
+    then
+        if type(blitzMmrHeaderLingerHideAt) == "number" and blitzMmrHeaderLingerHideAt <= GetTime() then
+            PvPScalpel_ResetBlitzHeaderRuntimeState()
+            PvPScalpel_BlitzMmrHeaderRefresh()
+            return
+        end
+        PvPScalpel_ClearBlitzHeaderVisuals()
+        return
+    end
+
+    if PvPScalpel_IsBlitzHeaderLingering()
+        and blitzMmrHeaderLingerReason ~= "postmatch"
+        and blitzMmrHeaderDismissLingerToken == PvPScalpel_GetCurrentBlitzHeaderLingerToken()
+    then
+        if type(blitzMmrHeaderLingerHideAt) == "number" and blitzMmrHeaderLingerHideAt <= GetTime() then
+            PvPScalpel_ResetBlitzHeaderRuntimeState()
+            PvPScalpel_BlitzMmrHeaderRefresh()
+            return
+        end
+        PvPScalpel_ClearBlitzHeaderVisuals()
+        return
+    end
+
+    if PvPScalpel_IsBlitzLobbyScanDisplayed(lobbyScanSnapshot) and blitzMmrHeaderDismissScan == true then
+        PvPScalpel_ClearBlitzHeaderVisuals()
+        return
+    end
+
+    if not PvPScalpel_IsBlitzHeaderLingering() and blitzMmrHeaderDismissQueue == true
+        and (queuedForBlitz or pendingResolution or blitzMmrHeaderAcceptedPopupVisible == true or queueState == "confirm")
+    then
+        PvPScalpel_ClearBlitzHeaderVisuals()
+        return
+    end
 
     if blitzMmrHeaderAcceptedPopupVisible == true then
         blitzMmrHeaderHasActiveQueue = true
@@ -937,8 +1384,19 @@ end
 
 function PvPScalpel_BlitzMmrHeaderHandleMatchSaved(match)
     PvPScalpel_UpdateBlitzMmrCacheFromMatch(match)
+    local summary = PvPScalpel_BuildBlitzMmrSummary(match)
+    local token = PvPScalpel_GetBlitzSummaryToken(summary)
+    if type(summary) == "table" and type(token) == "string" and token ~= "" then
+        blitzMmrHeaderPendingPostMatchSummary = summary
+        blitzMmrHeaderPendingPostMatchToken = token
+        if blitzMmrHeaderAwaitingPostMatchSummary == true and not PvPScalpel_IsLivePvpMatchActiveForHeader() then
+            PvPScalpel_StartBlitzHeaderLinger("postmatch", summary, token)
+        end
+    end
     PvPScalpel_BlitzMmrHeaderRefresh()
 end
+
+PvPScalpel_ApplyBlitzHeaderLayout()
 
 blitzMmrHeaderEventFrame:RegisterEvent("PLAYER_LOGIN")
 blitzMmrHeaderEventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -989,8 +1447,74 @@ blitzMmrHeaderEventFrame:SetScript("OnEvent", function(_, event, ...)
     PvPScalpel_BlitzMmrHeaderRefresh()
 end)
 
+blitzMmrHeaderFrame:RegisterForDrag("LeftButton")
+blitzMmrHeaderFrame:SetScript("OnDragStart", function(self)
+    if not IsShiftKeyDown or not IsShiftKeyDown() then
+        return
+    end
+    if InCombatLockdown and InCombatLockdown() then
+        return
+    end
+    PvPScalpel_CloseBlitzHeaderContextMenu()
+    self:StartMoving()
+    blitzMmrHeaderDragging = true
+end)
+
+blitzMmrHeaderFrame:SetScript("OnDragStop", function(self)
+    if blitzMmrHeaderDragging ~= true then
+        return
+    end
+    self:StopMovingOrSizing()
+    blitzMmrHeaderDragging = false
+    blitzMmrHeaderSuppressNextClick = true
+    PvPScalpel_SaveBlitzHeaderLayout()
+    PvPScalpel_ShowBlitzHeaderTooltip()
+end)
+
+blitzMmrHeaderFrame:SetScript("OnEnter", function()
+    PvPScalpel_ShowBlitzHeaderTooltip()
+end)
+
+blitzMmrHeaderFrame:SetScript("OnLeave", function()
+    if GameTooltip and GameTooltip:GetOwner() == blitzMmrHeaderFrame then
+        GameTooltip:Hide()
+    end
+end)
+
+blitzMmrHeaderFrame:SetScript("OnHide", function()
+    blitzMmrHeaderDragging = false
+    PvPScalpel_CloseBlitzHeaderContextMenu()
+    if GameTooltip and GameTooltip:GetOwner() == blitzMmrHeaderFrame then
+        GameTooltip:Hide()
+    end
+end)
+
 blitzMmrHeaderFrame:SetScript("OnMouseUp", function(_, button)
+    if button == "RightButton" then
+        PvPScalpel_OpenBlitzHeaderContextMenu()
+        return
+    end
+
     if button ~= "LeftButton" then
+        return
+    end
+
+    PvPScalpel_CloseBlitzHeaderContextMenu()
+
+    if blitzMmrHeaderSuppressNextClick == true then
+        blitzMmrHeaderSuppressNextClick = false
+        return
+    end
+
+    if IsShiftKeyDown and IsShiftKeyDown() then
+        return
+    end
+
+    local lobbyScanSnapshot = PvPScalpel_GetBlitzLobbyScanSnapshotSafe()
+    if PvPScalpel_IsBlitzLobbyScanCopyReady(lobbyScanSnapshot) then
+        if type(PvPScalpel_OpenLobbyScanCopyDialog) == "function" then
+            PvPScalpel_OpenLobbyScanCopyDialog(lobbyScanSnapshot.buffer)
+        end
         return
     end
     if not PvPScalpel_IsBlitzHeaderLingering() then
@@ -1021,6 +1545,27 @@ blitzMmrHeaderFrame:SetScript("OnUpdate", function(_, elapsed)
         if remainingSeconds <= 0 then
             PvPScalpel_ResetBlitzHeaderRuntimeState()
             PvPScalpel_ClearBlitzHeaderVisuals()
+        end
+        return
+    end
+
+    local lobbyScanSnapshot = PvPScalpel_GetBlitzLobbyScanSnapshotSafe()
+    if PvPScalpel_IsBlitzLobbyScanDisplayed(lobbyScanSnapshot) then
+        local targetProgress = PvPScalpel_GetBlitzLobbyScanProgress(lobbyScanSnapshot)
+        local scanState = type(lobbyScanSnapshot.scanState) == "string" and lobbyScanSnapshot.scanState or "LOADING"
+        if type(blitzMmrHeaderScanDisplayedProgress) ~= "number" then
+            blitzMmrHeaderScanDisplayedProgress = 0
+        end
+
+        local progressDelta = targetProgress - blitzMmrHeaderScanDisplayedProgress
+        if math.abs(progressDelta) > 0 then
+            local step = math.max(0.01, elapsed * 2.5)
+            if progressDelta > 0 then
+                blitzMmrHeaderScanDisplayedProgress = math.min(targetProgress, blitzMmrHeaderScanDisplayedProgress + step)
+            else
+                blitzMmrHeaderScanDisplayedProgress = math.max(targetProgress, blitzMmrHeaderScanDisplayedProgress - step)
+            end
+            PvPScalpel_ApplyBlitzLobbyScanProgressFill(scanState, blitzMmrHeaderScanDisplayedProgress)
         end
         return
     end
@@ -1069,7 +1614,7 @@ blitzMmrHeaderFrame:SetScript("OnUpdate", function(_, elapsed)
 
     local queuedProgress = PvPScalpel_GetBlitzQueuedProgress(queueElapsedSeconds, blitzMmrHeaderQueueEstimatedSeconds)
     if type(queuedProgress) == "number" then
-        PvPScalpel_SetBlitzHeaderProgressFill(queuedProgress, 0.62, 0.62, 0.66, 0.22)
+        PvPScalpel_SetBlitzHeaderQueuedStyleFill(queuedProgress)
     else
         PvPScalpel_HideBlitzHeaderProgressFill()
     end

@@ -1,0 +1,152 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\FrameXML\UI.xsd">
+    <Frame name="PvPScalpelBlitzLobbyScanWindow" parent="UIParent" inherits="BackdropTemplate" hidden="true" movable="true" enableMouse="true" clampedToScreen="true" toplevel="true" frameStrata="DIALOG">
+        <Size x="560" y="172"/>
+        <Anchors>
+            <Anchor point="CENTER"/>
+        </Anchors>
+
+        <Layers>
+            <Layer level="BACKGROUND">
+                <Texture parentKey="BackdropBase" file="Interface\ChatFrame\ChatFrameBackground">
+                    <Anchors>
+                        <Anchor point="TOPLEFT" x="6" y="-6"/>
+                        <Anchor point="BOTTOMRIGHT" x="-6" y="6"/>
+                    </Anchors>
+                    <Color r="0.02" g="0.03" b="0.05" a="0.72"/>
+                </Texture>
+
+                <Texture parentKey="GlassSheen" file="Interface\Buttons\WHITE8X8">
+                    <Anchors>
+                        <Anchor point="TOPLEFT" x="14" y="-14"/>
+                        <Anchor point="TOPRIGHT" x="-14" y="-14"/>
+                    </Anchors>
+                    <Size y="42"/>
+                    <Color r="1.00" g="1.00" b="1.00" a="0.03"/>
+                </Texture>
+
+                <Texture parentKey="BodyGlow" file="Interface\Buttons\WHITE8X8">
+                    <Anchors>
+                        <Anchor point="TOPLEFT" x="16" y="-54"/>
+                        <Anchor point="BOTTOMRIGHT" x="-16" y="16"/>
+                    </Anchors>
+                    <Color r="0.15" g="0.72" b="0.68" a="0.035"/>
+                </Texture>
+
+                <Texture parentKey="BottomShadow" file="Interface\Buttons\WHITE8X8">
+                    <Anchors>
+                        <Anchor point="BOTTOMLEFT" x="12" y="12"/>
+                        <Anchor point="BOTTOMRIGHT" x="-12" y="12"/>
+                    </Anchors>
+                    <Size y="38"/>
+                    <Color r="0.00" g="0.00" b="0.00" a="0.16"/>
+                </Texture>
+            </Layer>
+        </Layers>
+
+        <Frames>
+            <Frame name="$parentHeaderCapsule" parentKey="HeaderCapsule" inherits="BackdropTemplate">
+                <Size x="504" y="34"/>
+                <Anchors>
+                    <Anchor point="TOP" x="0" y="-14"/>
+                </Anchors>
+                <Layers>
+                    <Layer level="BACKGROUND">
+                        <Texture file="Interface\Buttons\WHITE8X8">
+                            <Anchors>
+                                <Anchor point="TOPLEFT"/>
+                                <Anchor point="BOTTOMRIGHT"/>
+                            </Anchors>
+                            <Color r="0.11" g="0.18" b="0.20" a="0.42"/>
+                        </Texture>
+                    </Layer>
+                    <Layer level="ARTWORK">
+                        <FontString name="$parentTitleText" parentKey="TitleText" inherits="GameFontNormalLarge">
+                            <Anchors>
+                                <Anchor point="LEFT" x="14" y="0"/>
+                            </Anchors>
+                            <Color r="1.00" g="0.90" b="0.42"/>
+                        </FontString>
+                    </Layer>
+                </Layers>
+            </Frame>
+
+            <Button parentKey="DragRegion">
+                <Anchors>
+                    <Anchor point="TOPLEFT" relativeTo="$parentHeaderCapsule" relativePoint="TOPLEFT" x="0" y="0"/>
+                    <Anchor point="TOPRIGHT" relativeTo="$parentHeaderCapsule" relativePoint="TOPRIGHT" x="-30" y="0"/>
+                    <Anchor point="BOTTOMLEFT" relativeTo="$parentHeaderCapsule" relativePoint="BOTTOMLEFT" x="0" y="0"/>
+                    <Anchor point="BOTTOMRIGHT" relativeTo="$parentHeaderCapsule" relativePoint="BOTTOMRIGHT" x="-30" y="0"/>
+                </Anchors>
+            </Button>
+
+            <Button parentKey="CloseButton" inherits="UIPanelCloseButton">
+                <Anchors>
+                    <Anchor point="RIGHT" relativeTo="$parentHeaderCapsule" relativePoint="RIGHT" x="18" y="0"/>
+                </Anchors>
+            </Button>
+
+            <Frame name="$parentProgressFrame" parentKey="ProgressFrame" inherits="BackdropTemplate">
+                <Size x="472" y="24"/>
+                <Anchors>
+                    <Anchor point="TOPLEFT" relativeTo="$parentHeaderCapsule" relativePoint="BOTTOMLEFT" x="0" y="-18"/>
+                </Anchors>
+                <Layers>
+                    <Layer level="BACKGROUND">
+                        <Texture parentKey="Background" file="Interface\ChatFrame\ChatFrameBackground">
+                            <Anchors>
+                                <Anchor point="TOPLEFT"/>
+                                <Anchor point="BOTTOMRIGHT"/>
+                            </Anchors>
+                            <Color r="0.01" g="0.02" b="0.03" a="0.88"/>
+                        </Texture>
+
+                        <Texture parentKey="Fill" file="Interface\Buttons\WHITE8X8">
+                            <Anchors>
+                                <Anchor point="TOPLEFT" x="1" y="-1"/>
+                                <Anchor point="BOTTOMLEFT" x="1" y="1"/>
+                            </Anchors>
+                            <Size x="0"/>
+                            <Color r="0.22" g="0.86" b="0.80" a="0.96"/>
+                        </Texture>
+                    </Layer>
+
+                    <Layer level="ARTWORK">
+                        <FontString parentKey="Label" inherits="GameFontHighlightSmall">
+                            <Anchors>
+                                <Anchor point="CENTER"/>
+                            </Anchors>
+                            <Color r="0.92" g="0.96" b="0.98"/>
+                        </FontString>
+                    </Layer>
+                </Layers>
+            </Frame>
+
+            <Frame name="$parentEditBoxShell" parentKey="EditBoxShell" inherits="BackdropTemplate">
+                <Size x="472" y="38"/>
+                <Anchors>
+                    <Anchor point="TOPLEFT" relativeTo="$parentProgressFrame" relativePoint="BOTTOMLEFT" x="0" y="-16"/>
+                </Anchors>
+                <Layers>
+                    <Layer level="BACKGROUND">
+                        <Texture file="Interface\ChatFrame\ChatFrameBackground">
+                            <Anchors>
+                                <Anchor point="TOPLEFT"/>
+                                <Anchor point="BOTTOMRIGHT"/>
+                            </Anchors>
+                            <Color r="0.01" g="0.02" b="0.03" a="0.92"/>
+                        </Texture>
+                    </Layer>
+                </Layers>
+            </Frame>
+
+            <EditBox parentKey="EditBox" inherits="InputBoxTemplate">
+                <Size x="452" y="28"/>
+                <Anchors>
+                    <Anchor point="CENTER" relativeTo="$parentEditBoxShell" relativePoint="CENTER" x="0" y="0"/>
+                </Anchors>
+            </EditBox>
+        </Frames>
+    </Frame>
+</Ui>

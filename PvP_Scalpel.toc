@@ -16,6 +16,7 @@ src/Blitz_MMR_Header.lua
 src/Debug_Windows.lua
 src/Spell_Cast_Debug.lua
 src/Kicks_Window.lua
+src/UnitPopup_Menu.xml
 src/UnitPopup_Menu.lua
 src/User_Commands.lua
 src/Garbage_Collector.lua
