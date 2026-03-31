@@ -38,6 +38,9 @@ local PvPScalpel_ExactRealmSlugMap = {
     ["aegwynn"] = "aegwynn",
     ["боейскаятунда"] = "borean-tundra",
     ["борейская тундра"] = "borean-tundra",
+    ["area 52"] = "area-52",
+    ["area52"] = "area-52",
+    -- ["бое"]
 }
 
 local function PvPScalpel_NormalizeSlugLookupKey(text)
