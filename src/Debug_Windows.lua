@@ -67,6 +67,25 @@ local function ApplyBackdrop(frame)
     frame:SetBackdropBorderColor(0.16, 0.75, 0.56, 0.95)
 end
 
+local function StripDebugMarkup(text)
+    if type(text) ~= "string" then
+        return ""
+    end
+
+    return text
+        :gsub("|c%x%x%x%x%x%x%x%x", "")
+        :gsub("|r", "")
+        :gsub("|T.-|t", "")
+end
+
+local function GetWindowExportText(window)
+    if type(window) ~= "table" or type(window.messageHistory) ~= "table" or #window.messageHistory == 0 then
+        return nil
+    end
+
+    return table.concat(window.messageHistory, "\n")
+end
+
 local function CreateWindow(windowName)
     local normalizedName = NormalizeWindowName(windowName)
     local globalName = BuildWindowGlobalName(normalizedName)
@@ -123,6 +142,7 @@ local function CreateWindow(windowName)
         title = title,
         name = normalizedName,
         suppressAutoOpen = false,
+        messageHistory = {},
     }
 
     local dragRegion = CreateFrame("Button", nil, frame)
@@ -147,6 +167,22 @@ local function CreateWindow(windowName)
         frame:Hide()
     end)
 
+    local copyButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    copyButton:SetPoint("TOPRIGHT", closeButton, "TOPLEFT", -4, -1)
+    copyButton:SetSize(52, 18)
+    copyButton:SetText("Copy")
+    copyButton:SetScript("OnClick", function()
+        local exportText = GetWindowExportText(window)
+        if type(exportText) ~= "string" or exportText == "" then
+            return
+        end
+
+        if type(PvPScalpel_OpenCopyTextDialog) == "function" then
+            PvPScalpel_OpenCopyTextDialog(exportText, "Copy debug log", "Press Ctrl+C to copy debug log")
+        end
+    end)
+    window.copyButton = copyButton
+
     local scrollFrame = CreateFrame("ScrollingMessageFrame", nil, frame)
     scrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -30)
     scrollFrame:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 10)
@@ -163,6 +199,24 @@ local function CreateWindow(windowName)
             self:ScrollDown()
         end
     end)
+    local originalAddMessage = scrollFrame.AddMessage
+    scrollFrame.AddMessage = function(self, message, ...)
+        local plainText = StripDebugMarkup(tostring(message or ""))
+        if plainText ~= "" then
+            table.insert(window.messageHistory, plainText)
+            while #window.messageHistory > 1000 do
+                table.remove(window.messageHistory, 1)
+            end
+        end
+        return originalAddMessage(self, message, ...)
+    end
+    local originalClear = scrollFrame.Clear
+    scrollFrame.Clear = function(self, ...)
+        window.messageHistory = {}
+        if type(originalClear) == "function" then
+            return originalClear(self, ...)
+        end
+    end
 
     local resizeHandle = CreateFrame("Button", nil, frame)
     resizeHandle:SetSize(16, 16)

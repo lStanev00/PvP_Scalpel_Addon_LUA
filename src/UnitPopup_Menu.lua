@@ -326,6 +326,37 @@ local function PvPScalpel_ShowClipboardNotice(text)
     frame.anim:Play()
 end
 
+local function PvPScalpel_GetCopyDialogDisplayText(text)
+    local rawText = type(text) == "string" and text or ""
+    return rawText:gsub("|", "||")
+end
+
+local function PvPScalpel_ApplyCopyDialogText(editBox, text)
+    if type(editBox) ~= "table" then
+        return false, "missing_editbox"
+    end
+
+    local desiredText = PvPScalpel_GetCopyDialogDisplayText(text)
+
+    editBox:SetText(desiredText)
+    local currentText = type(editBox.GetText) == "function" and (editBox:GetText() or "") or ""
+    if currentText == desiredText then
+        return true, "SetText"
+    end
+
+    editBox:SetText("")
+    if desiredText ~= "" and type(editBox.Insert) == "function" then
+        editBox:Insert(desiredText)
+        currentText = type(editBox.GetText) == "function" and (editBox:GetText() or "") or ""
+        if currentText == desiredText then
+            return true, "Insert"
+        end
+    end
+
+    editBox:SetText("")
+    return desiredText == "", desiredText == "" and "empty" or "failed"
+end
+
 local function PvPScalpel_GetUnitPopupUrlDialog()
     if PvPScalpel_UnitPopupUrlDialog then
         return PvPScalpel_UnitPopupUrlDialog
@@ -383,11 +414,16 @@ local function PvPScalpel_GetUnitPopupUrlDialog()
     frame.ApplySourceText = function(self)
         local text = type(self.sourceText) == "string" and self.sourceText or ""
         self.restoringText = true
-        self.editBox:SetText("")
-        if text ~= "" and type(self.editBox.Insert) == "function" then
-            self.editBox:Insert(text)
-        else
-            self.editBox:SetText(text)
+        local ok, method = PvPScalpel_ApplyCopyDialogText(self.editBox, text)
+        if not ok and type(PvPScalpel_DebugWriteMessage) == "function" then
+            PvPScalpel_DebugWriteMessage(
+                string.format(
+                    "|cff00ff98[PvP Scalpel]|r [CopyDialog] populate failed title=%s len=%d method=%s",
+                    tostring(self.TitleText and self.TitleText.GetText and self.TitleText:GetText() or "unknown"),
+                    string.len(text or ""),
+                    tostring(method or "unknown")
+                )
+            )
         end
         if type(self.editBox.SetCursorPosition) == "function" then
             self.editBox:SetCursorPosition(0)
@@ -436,8 +472,23 @@ local function PvPScalpel_ShowLobbyScanCopyDialog(text)
     PvPScalpel_ShowClipboardNotice("Press Ctrl+C to copy lobby scan")
 end
 
+local function PvPScalpel_ShowCopyTextDialog(text, title, notice)
+    if type(text) ~= "string" or text == "" then
+        return
+    end
+
+    PvPScalpel_ShowUnitPopupUrlDialog(text, title)
+    if type(notice) == "string" and notice ~= "" then
+        PvPScalpel_ShowClipboardNotice(notice)
+    end
+end
+
 function PvPScalpel_OpenLobbyScanCopyDialog(text)
     PvPScalpel_ShowLobbyScanCopyDialog(text)
+end
+
+function PvPScalpel_OpenCopyTextDialog(text, title, notice)
+    PvPScalpel_ShowCopyTextDialog(text, title, notice)
 end
 
 local function PvPScalpel_IsDebugEnabled()
@@ -476,11 +527,58 @@ local function PvPScalpel_IsSelfPopupContext(contextData)
     return contextCharacterName == playerName
 end
 
-local function PvPScalpel_GetLobbyScanConfig()
-    if type(PvPScalpel_FormatChecker) ~= "function" then
-        return nil
+local function PvPScalpel_SafeLobbyScanPvpFlag(methodName)
+    if not C_PvP then
+        return false
     end
 
+    local fn = C_PvP[methodName]
+    if type(fn) ~= "function" then
+        return false
+    end
+
+    local ok, value = pcall(fn)
+    return ok and value == true
+end
+
+local function PvPScalpel_GetPregateLobbyScanFormat()
+    if PvPScalpel_SafeLobbyScanPvpFlag("IsRatedSoloShuffle")
+        or PvPScalpel_SafeLobbyScanPvpFlag("IsSoloShuffle")
+        or PvPScalpel_SafeLobbyScanPvpFlag("IsBrawlSoloShuffle")
+    then
+        return "Solo Shuffle"
+    end
+
+    if PvPScalpel_SafeLobbyScanPvpFlag("IsSoloRBG")
+        or PvPScalpel_SafeLobbyScanPvpFlag("IsRatedSoloRBG")
+        or PvPScalpel_SafeLobbyScanPvpFlag("IsBrawlSoloRBG")
+    then
+        return "Battleground Blitz"
+    end
+
+    if PvPScalpel_SafeLobbyScanPvpFlag("IsRatedArena") then
+        local bracket = type(PvPScalpel_GetActiveMatchBracket) == "function" and PvPScalpel_GetActiveMatchBracket() or nil
+        if bracket == 1 then
+            return "Rated Arena 2v2"
+        end
+        if bracket == 2 then
+            return "Rated Arena 3v3"
+        end
+        return "Rated Arena"
+    end
+
+    if PvPScalpel_SafeLobbyScanPvpFlag("IsRatedBattleground") then
+        return "Rated Battleground"
+    end
+
+    if type(PvPScalpel_FormatChecker) == "function" then
+        return PvPScalpel_FormatChecker()
+    end
+
+    return nil
+end
+
+local function PvPScalpel_GetLobbyScanConfig()
     if PvPScalpel_WaitingForGateOpen ~= true then
         return nil
     end
@@ -489,7 +587,7 @@ local function PvPScalpel_GetLobbyScanConfig()
         return nil
     end
 
-    local format = PvPScalpel_FormatChecker()
+    local format = PvPScalpel_GetPregateLobbyScanFormat()
     if format == "Battleground Blitz" then
         return {
             format = format,
