@@ -34,6 +34,8 @@ local PvPScalpel_ExactRealmSlugMap = {
     ["черныйшрам"] = "blackscar",
     ["ченыйшам"] = "blackscar",
     ["ясеневый лес"] = "ashenvale",
+    ["свежеватель душ"] = "soulflayer",
+    ["aegwynn"] = "aegwynn",
 }
 
 local function PvPScalpel_NormalizeSlugLookupKey(text)
