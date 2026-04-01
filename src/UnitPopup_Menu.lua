@@ -36,6 +36,12 @@ local PvPScalpel_BlitzLobbyScanMockEntries = nil
 local PvPScalpel_BlitzLobbyScanSnapshot = nil
 local PvPScalpel_BlitzLobbyScanSnapshotSignature = nil
 local PvPScalpel_BlitzLobbyScanLogSignature = nil
+local PvPScalpel_BlitzLobbyEnemyLastSignature = nil
+local PvPScalpel_BlitzLobbyEnemyLastImprovedAt = 0
+local PvPScalpel_BlitzLobbyEnemySettledAt = nil
+local PvPScalpel_BlitzLobbyEnemySteadyStateSeconds = 1.0
+local PvPScalpel_BlitzLobbyEnemySpecIDByKey = {}
+local PvPScalpel_BlitzLobbyClassTokenToClassID = nil
 local PvPScalpel_SetBlitzLobbyScanFailure
 local PvPScalpel_ClearBlitzLobbyScanFailure
 local PvPScalpel_CyrillicToLatinMap = {
@@ -105,6 +111,58 @@ local function PvPScalpel_SaveBlitzLobbyScanLayout(frame)
         x = type(xOfs) == "number" and xOfs or 0,
         y = type(yOfs) == "number" and yOfs or 0,
     }
+end
+
+local function PvPScalpel_GetLobbyScanNow()
+    if type(GetTime) == "function" then
+        return GetTime()
+    end
+    return 0
+end
+
+local function PvPScalpel_IsSecretLobbyScanValue(value)
+    if value == nil then
+        return false
+    end
+
+    if issecretvalue then
+        local okSecretValue, isSecretValue = pcall(issecretvalue, value)
+        if okSecretValue and isSecretValue == true then
+            return true
+        end
+    end
+
+    if issecrettable then
+        local okSecretTable, isSecretTable = pcall(issecrettable, value)
+        if okSecretTable and isSecretTable == true then
+            return true
+        end
+    end
+
+    if hasanysecretvalues then
+        local okAnySecrets, hasSecrets = pcall(hasanysecretvalues, value)
+        if okAnySecrets and hasSecrets == true then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function PvPScalpel_SanitizeLobbyScanValue(value)
+    local sanitized = value
+    if scrubsecretvalues then
+        local ok, safeValue = pcall(scrubsecretvalues, value)
+        if ok then
+            sanitized = safeValue
+        end
+    end
+
+    if PvPScalpel_IsSecretLobbyScanValue(sanitized) then
+        return nil
+    end
+
+    return sanitized
 end
 
 local function PvPScalpel_NormalizeRealmLookupKey(realm)
@@ -593,7 +651,9 @@ local function PvPScalpel_GetLobbyScanConfig()
             format = format,
             bracketName = "[Battleground Blitz]",
             expectedLocalCount = 8,
-            expectedTotalLobbyCount = 8,
+            expectedAllyCount = 8,
+            expectedEnemyCount = 8,
+            expectedTotalLobbyCount = 16,
             rosterMode = "raid",
         }
     end
@@ -603,6 +663,8 @@ local function PvPScalpel_GetLobbyScanConfig()
             format = format,
             bracketName = "[Solo Shuffle]",
             expectedLocalCount = 3,
+            expectedAllyCount = 3,
+            expectedEnemyCount = 0,
             expectedTotalLobbyCount = 6,
             rosterMode = "party",
         }
@@ -613,6 +675,8 @@ local function PvPScalpel_GetLobbyScanConfig()
             format = format,
             bracketName = "[Rated Arena 2v2]",
             expectedLocalCount = 2,
+            expectedAllyCount = 2,
+            expectedEnemyCount = 0,
             expectedTotalLobbyCount = 2,
             rosterMode = "party",
         }
@@ -623,6 +687,8 @@ local function PvPScalpel_GetLobbyScanConfig()
             format = format,
             bracketName = "[Rated Arena 3v3]",
             expectedLocalCount = 3,
+            expectedAllyCount = 3,
+            expectedEnemyCount = 0,
             expectedTotalLobbyCount = 3,
             rosterMode = "party",
         }
@@ -633,6 +699,8 @@ local function PvPScalpel_GetLobbyScanConfig()
             format = format,
             bracketName = "[Rated Battleground]",
             expectedLocalCount = 10,
+            expectedAllyCount = 10,
+            expectedEnemyCount = 0,
             expectedTotalLobbyCount = 10,
             rosterMode = "raid",
         }
@@ -685,21 +753,35 @@ local function PvPScalpel_GetMockLobbyScanConfig()
         format = "Battleground Blitz",
         bracketName = "[Battleground Blitz]",
         expectedLocalCount = 8,
-        expectedTotalLobbyCount = 8,
+        expectedAllyCount = 8,
+        expectedEnemyCount = 8,
+        expectedTotalLobbyCount = 16,
         rosterMode = "raid",
     }
 end
 
 local function PvPScalpel_GetMockLobbyScanEntries()
     return {
-        "Lychezar:chamber-of-aspects:eu(73)",
-        "Bluelights:argent-dawn:eu(257)",
-        "Sqüídwàrd:argent-dawn:eu(253)",
-        "Ben:ghostlands:eu(70)",
-        "Ganikx:silvermoon:eu(577)",
-        "Vikrr:silvermoon:eu(256)",
-        "Bibimbaptism:silvermoon:eu(258)",
-        "Destraz:silvermoon:eu(1468)",
+        ally = {
+            "Lychezar:chamber-of-aspects:eu(73)",
+            "Bluelights:argent-dawn:eu(257)",
+            "Sqüídwàrd:argent-dawn:eu(253)",
+            "Ben:ghostlands:eu(70)",
+            "Ganikx:silvermoon:eu(577)",
+            "Vikrr:silvermoon:eu(256)",
+            "Bibimbaptism:silvermoon:eu(258)",
+            "Destraz:silvermoon:eu(1468)",
+        },
+        enemy = {
+            "Arenafox:stormscale:eu(254)",
+            "Mindlock:burning-legion:eu(258)",
+            "Shieldrun:ravencrest:eu(73)",
+            "Mistweave:kazzak:eu(270)",
+            "Shadowalt:outland:eu(258)",
+            "Rotblast:tarren-mill:eu(252)",
+            "Moonshot:silvermoon:eu(254)",
+            "Hammerx:dreanor:eu(70)",
+        },
     }
 end
 
@@ -736,6 +818,9 @@ local function PvPScalpel_ClearBlitzLobbyInspectState()
     PvPScalpel_BlitzLobbySpecCache = {}
     PvPScalpel_BlitzLobbySpecRetryAfter = {}
     PvPScalpel_BlitzLobbyLastInspectSkipReasonByGuid = {}
+    PvPScalpel_BlitzLobbyEnemyLastSignature = nil
+    PvPScalpel_BlitzLobbyEnemyLastImprovedAt = 0
+    PvPScalpel_BlitzLobbyEnemySettledAt = nil
     PvPScalpel_ClearBlitzLobbyScanFailure()
     PvPScalpel_BlitzLobbyInspectPendingGuid = nil
     PvPScalpel_BlitzLobbyInspectPendingUnit = nil
@@ -952,9 +1037,282 @@ local function PvPScalpel_CollectBlitzLobbyRoster()
     return entries, joinedCount, resolvedCount
 end
 
-local function PvPScalpel_BuildBlitzLobbyBuffer(entries, configOverride)
+local function PvPScalpel_PrepareLobbyScanScoreboardRead()
+    if type(PvPScalpel_PrepareScoreboardRead) == "function" then
+        PvPScalpel_PrepareScoreboardRead()
+        return
+    end
+
+    if SetBattlefieldScoreFaction then
+        pcall(SetBattlefieldScoreFaction, -1)
+    end
+    if RequestBattlefieldScoreData then
+        pcall(RequestBattlefieldScoreData)
+    end
+end
+
+local function PvPScalpel_GetLobbyScanClassIDByToken(classToken)
+    if type(classToken) ~= "string" or classToken == "" then
+        return nil
+    end
+
+    if type(PvPScalpel_BlitzLobbyClassTokenToClassID) ~= "table" then
+        PvPScalpel_BlitzLobbyClassTokenToClassID = {}
+        if type(GetClassInfo) == "function" then
+            for classID = 1, 20 do
+                local _, classTokenValue = GetClassInfo(classID)
+                if type(classTokenValue) == "string" and classTokenValue ~= "" then
+                    PvPScalpel_BlitzLobbyClassTokenToClassID[string.upper(classTokenValue)] = classID
+                end
+            end
+        end
+    end
+
+    return PvPScalpel_BlitzLobbyClassTokenToClassID[string.upper(classToken)]
+end
+
+local function PvPScalpel_ResolveBlitzEnemySpecID(classToken, talentSpec)
+    local sanitizedClassToken = PvPScalpel_SanitizeLobbyScanValue(classToken)
+    local sanitizedTalentSpec = PvPScalpel_SanitizeLobbyScanValue(talentSpec)
+    if type(sanitizedClassToken) ~= "string"
+        or sanitizedClassToken == ""
+        or type(sanitizedTalentSpec) ~= "string"
+        or sanitizedTalentSpec == ""
+    then
+        return nil
+    end
+
+    local cacheKey = string.upper(sanitizedClassToken) .. ":" .. string.lower(sanitizedTalentSpec)
+    local cachedSpecID = PvPScalpel_BlitzLobbyEnemySpecIDByKey[cacheKey]
+    if cachedSpecID ~= nil then
+        return cachedSpecID or nil
+    end
+
+    local classID = PvPScalpel_GetLobbyScanClassIDByToken(sanitizedClassToken)
+    if type(classID) ~= "number"
+        or classID <= 0
+        or not C_SpecializationInfo
+        or type(C_SpecializationInfo.GetNumSpecializationsForClassID) ~= "function"
+        or type(GetSpecializationInfoForClassID) ~= "function"
+    then
+        PvPScalpel_BlitzLobbyEnemySpecIDByKey[cacheKey] = false
+        return nil
+    end
+
+    local specCount = C_SpecializationInfo.GetNumSpecializationsForClassID(classID) or 0
+    local loweredTalentSpec = string.lower(sanitizedTalentSpec)
+    for specIndex = 1, specCount do
+        local ok, specID, specName = pcall(GetSpecializationInfoForClassID, classID, specIndex)
+        specName = PvPScalpel_SanitizeLobbyScanValue(specName)
+        if ok
+            and type(specID) == "number"
+            and specID > 0
+            and type(specName) == "string"
+            and specName ~= ""
+            and (specName == sanitizedTalentSpec or string.lower(specName) == loweredTalentSpec)
+        then
+            PvPScalpel_BlitzLobbyEnemySpecIDByKey[cacheKey] = specID
+            return specID
+        end
+    end
+
+    PvPScalpel_BlitzLobbyEnemySpecIDByKey[cacheKey] = false
+    return nil
+end
+
+local function PvPScalpel_GetBlitzEnemyLobbyScoreInfo(index)
+    if not C_PvP or type(C_PvP.GetScoreInfo) ~= "function" then
+        return nil
+    end
+
+    local ok, rawScore = pcall(C_PvP.GetScoreInfo, index)
+    if not ok then
+        return nil
+    end
+
+    local score = PvPScalpel_SanitizeLobbyScanValue(rawScore)
+    if type(score) ~= "table" then
+        return nil
+    end
+
+    local playerName = PvPScalpel_SanitizeLobbyScanValue(score.name or score.playerName)
+    local guid = PvPScalpel_SanitizeLobbyScanValue(score.guid)
+    local classToken = PvPScalpel_SanitizeLobbyScanValue(score.classToken)
+    local talentSpec = PvPScalpel_SanitizeLobbyScanValue(score.talentSpec)
+    local faction = PvPScalpel_SanitizeLobbyScanValue(score.faction)
+    if type(guid) ~= "string" or guid == "" or type(faction) ~= "number" then
+        return nil
+    end
+
+    return {
+        guid = guid,
+        name = playerName,
+        classToken = classToken,
+        talentSpec = talentSpec,
+        faction = faction,
+    }
+end
+
+local function PvPScalpel_GetBlitzEnemyLobbyLocalFaction(totalPlayers)
+    local playerGuid = UnitGUID and UnitGUID("player") or nil
+    if type(playerGuid) ~= "string" or playerGuid == "" then
+        return nil
+    end
+
+    for i = 1, totalPlayers do
+        local score = PvPScalpel_GetBlitzEnemyLobbyScoreInfo(i)
+        if score and score.guid == playerGuid then
+            return score.faction
+        end
+    end
+
+    return nil
+end
+
+local function PvPScalpel_BuildBlitzEnemyLobbyEntry(score)
+    if type(score) ~= "table" then
+        return nil
+    end
+
+    local fullName = PvPScalpel_SanitizeLobbyScanValue(score.name)
+    local classToken = PvPScalpel_SanitizeLobbyScanValue(score.classToken)
+    local talentSpec = PvPScalpel_SanitizeLobbyScanValue(score.talentSpec)
+    if type(fullName) ~= "string"
+        or fullName == ""
+        or type(classToken) ~= "string"
+        or classToken == ""
+        or type(talentSpec) ~= "string"
+        or talentSpec == ""
+    then
+        return nil
+    end
+
+    local name, realm = PvPScalpel_SplitCharacterAndRealm(fullName)
+    realm = PvPScalpel_SanitizeLobbyScanValue(realm) or GetRealmName() or GetNormalizedRealmName()
+    if type(name) ~= "string" or name == "" then
+        return nil
+    end
+
+    local displayRealm = PvPScalpel_ResolveDisplayRealm(realm)
+    if type(displayRealm) ~= "string" or displayRealm == "" then
+        return nil
+    end
+
+    local specID = PvPScalpel_ResolveBlitzEnemySpecID(classToken, talentSpec)
+    if type(specID) ~= "number" or specID <= 0 then
+        return nil
+    end
+
+    local normalizedRealmSlug = PvPScalpel_NormalizeAsciiRealmSlug(displayRealm)
+    local regionCode = PvPScalpel_GetCurrentRegionCode()
+    return string.format("%s:%s:%s(%d)", name, normalizedRealmSlug, regionCode, specID)
+end
+
+local function PvPScalpel_CollectBlitzEnemyLobbyRoster(config)
+    if type(config) ~= "table" or config.format ~= "Battleground Blitz" then
+        return {}, 0, 0
+    end
+
+    if not C_PvP or type(C_PvP.GetScoreInfo) ~= "function" or type(GetNumBattlefieldScores) ~= "function" then
+        return {}, 0, 0
+    end
+
+    PvPScalpel_PrepareLobbyScanScoreboardRead()
+
+    local totalPlayers = GetNumBattlefieldScores() or 0
+    if totalPlayers <= 0 then
+        return {}, 0, 0
+    end
+
+    local localFaction = PvPScalpel_GetBlitzEnemyLobbyLocalFaction(totalPlayers)
+    if type(localFaction) ~= "number" then
+        return {}, 0, 0
+    end
+
+    local expectedEnemyCount = type(config.expectedEnemyCount) == "number" and config.expectedEnemyCount or 0
+    local entries = {}
+    local seenGuids = {}
+    local joinedCount = 0
+    local resolvedCount = 0
+    for i = 1, totalPlayers do
+        local score = PvPScalpel_GetBlitzEnemyLobbyScoreInfo(i)
+        if score
+            and score.faction ~= localFaction
+            and type(score.guid) == "string"
+            and score.guid ~= ""
+            and not seenGuids[score.guid]
+        then
+            seenGuids[score.guid] = true
+            joinedCount = joinedCount + 1
+
+            local entry = PvPScalpel_BuildBlitzEnemyLobbyEntry(score)
+            if type(entry) == "string" and entry ~= "" then
+                table.insert(entries, entry)
+                resolvedCount = resolvedCount + 1
+            end
+
+            if expectedEnemyCount > 0 and joinedCount >= expectedEnemyCount and resolvedCount >= expectedEnemyCount then
+                break
+            end
+        end
+    end
+
+    return entries, joinedCount, resolvedCount
+end
+
+local function PvPScalpel_IsFullResolvedTeam(joinedCount, resolvedCount, entryCount, expectedCount)
+    return type(expectedCount) == "number"
+        and expectedCount > 0
+        and joinedCount >= expectedCount
+        and resolvedCount >= expectedCount
+        and entryCount == expectedCount
+end
+
+local function PvPScalpel_UpdateBlitzEnemySettledState(config, allyReady, enemyEntries, enemyResolvedCount)
+    if not allyReady or type(config) ~= "table" or config.format ~= "Battleground Blitz" then
+        PvPScalpel_BlitzLobbyEnemyLastSignature = nil
+        PvPScalpel_BlitzLobbyEnemyLastImprovedAt = 0
+        PvPScalpel_BlitzLobbyEnemySettledAt = nil
+        return false
+    end
+
+    local signature = table.concat({
+        tostring(enemyResolvedCount or 0),
+        type(enemyEntries) == "table" and table.concat(enemyEntries, "|") or "",
+    }, "\031")
+    local now = PvPScalpel_GetLobbyScanNow()
+    if signature ~= PvPScalpel_BlitzLobbyEnemyLastSignature then
+        PvPScalpel_BlitzLobbyEnemyLastSignature = signature
+        PvPScalpel_BlitzLobbyEnemyLastImprovedAt = now
+        PvPScalpel_BlitzLobbyEnemySettledAt = nil
+    end
+
+    local expectedEnemyCount = type(config.expectedEnemyCount) == "number" and config.expectedEnemyCount or 0
+    if expectedEnemyCount > 0 and enemyResolvedCount >= expectedEnemyCount then
+        PvPScalpel_BlitzLobbyEnemySettledAt = PvPScalpel_BlitzLobbyEnemySettledAt or now
+        return true
+    end
+
+    if type(PvPScalpel_BlitzLobbyEnemyLastImprovedAt) == "number"
+        and (now - PvPScalpel_BlitzLobbyEnemyLastImprovedAt) >= PvPScalpel_BlitzLobbyEnemySteadyStateSeconds
+    then
+        PvPScalpel_BlitzLobbyEnemySettledAt = PvPScalpel_BlitzLobbyEnemySettledAt or now
+        return true
+    end
+
+    return false
+end
+
+local function PvPScalpel_BuildBlitzLobbyBuffer(entries, configOverride, enemyEntries)
     local config = configOverride or PvPScalpel_GetLobbyScanConfig()
     local bracketCode = tostring(PvPScalpel_GetLobbyScanBracketCode(config))
+    local expectedEnemyCount = type(config) == "table" and type(config.expectedEnemyCount) == "number" and config.expectedEnemyCount or 0
+    if expectedEnemyCount > 0 then
+        local allySegment = type(entries) == "table" and table.concat(entries, "|") or ""
+        local enemySegment = type(enemyEntries) == "table" and table.concat(enemyEntries, "|") or ""
+        return bracketCode .. "[" .. allySegment .. "][" .. enemySegment .. "]"
+    end
+
     if type(entries) ~= "table" or #entries == 0 then
         return bracketCode
     end
@@ -993,6 +1351,11 @@ local function PvPScalpel_GetBlitzLobbyScanSnapshotSignature(snapshot)
         tostring(snapshot.joinedCount or 0),
         tostring(snapshot.resolvedCount or 0),
         tostring(snapshot.expectedLocalCount or 0),
+        tostring(snapshot.resolvedAllyCount or 0),
+        tostring(snapshot.expectedAllyCount or 0),
+        tostring(snapshot.resolvedEnemyCount or 0),
+        tostring(snapshot.expectedEnemyCount or 0),
+        tostring(snapshot.scanPhase or ""),
         tostring(snapshot.entryCount or 0),
         tostring(snapshot.failureReason or ""),
         tostring(snapshot.bufferLength or 0),
@@ -1017,23 +1380,27 @@ function PvPScalpel_GetBlitzLobbyScanSnapshot()
     return PvPScalpel_BlitzLobbyScanSnapshot
 end
 
-local function PvPScalpel_ComputeBlitzLobbyScanState(config, joinedCount, resolvedCount, entryCount)
+local function PvPScalpel_ComputeBlitzLobbyScanState(config, metrics)
     if PvPScalpel_BlitzLobbyScanMockMode == true then
         return "MOCK", nil
     end
 
-    local expectedLocalCount = type(config) == "table" and type(config.expectedLocalCount) == "number" and config.expectedLocalCount or 0
-    local ready = expectedLocalCount > 0
-        and joinedCount >= expectedLocalCount
-        and resolvedCount >= expectedLocalCount
-        and entryCount == expectedLocalCount
+    if type(config) ~= "table" then
+        return "FAILED", "no active scan config"
+    end
+
+    local expectedAllyCount = type(config.expectedAllyCount) == "number" and config.expectedAllyCount
+        or (type(config.expectedLocalCount) == "number" and config.expectedLocalCount or 0)
+    local allyJoinedCount = type(metrics) == "table" and metrics.allyJoinedCount or 0
+    local allyResolvedCount = type(metrics) == "table" and metrics.allyResolvedCount or 0
+    local allyEntryCount = type(metrics) == "table" and metrics.allyEntryCount or 0
+    local ready = PvPScalpel_IsFullResolvedTeam(allyJoinedCount, allyResolvedCount, allyEntryCount, expectedAllyCount)
+    if config.format == "Battleground Blitz" then
+        ready = ready and type(metrics) == "table" and metrics.enemySettled == true
+    end
 
     if ready then
         return "READY", nil
-    end
-
-    if type(config) ~= "table" then
-        return "FAILED", "no active scan config"
     end
 
     if type(PvPScalpel_BlitzLobbyScanFailureReason) == "string" and PvPScalpel_BlitzLobbyScanFailureReason ~= "" then
@@ -1050,7 +1417,13 @@ local function PvPScalpel_LogBlitzLobbyScanState(config, state, joinedCount, res
         return
     end
 
-    local expectedLocalCount = type(config.expectedLocalCount) == "number" and config.expectedLocalCount or 0
+    local expectedLocalCount = type(config.expectedAllyCount) == "number" and config.expectedAllyCount
+        or (type(config.expectedLocalCount) == "number" and config.expectedLocalCount or 0)
+    local expectedEnemyCount = type(config.expectedEnemyCount) == "number" and config.expectedEnemyCount or 0
+    local expectedCount = expectedLocalCount + expectedEnemyCount
+    if expectedCount <= 0 then
+        expectedCount = expectedLocalCount
+    end
     local signature = table.concat({
         tostring(config.format or "unknown"),
         tostring(joinedCount or 0),
@@ -1074,7 +1447,7 @@ local function PvPScalpel_LogBlitzLobbyScanState(config, state, joinedCount, res
             joinedCount or 0,
             resolvedCount or 0,
             entryCount or 0,
-            expectedLocalCount,
+            expectedCount,
             bufferLength or 0,
             type(failureReason) == "string" and failureReason ~= "" and (" failure=" .. failureReason) or ""
         )
@@ -1190,25 +1563,39 @@ PvPScalpel_RefreshBlitzLobbyScanWindow = function()
     local config = PvPScalpel_BlitzLobbyScanMockMode == true and PvPScalpel_BlitzLobbyScanMockConfig or liveConfig
 
     if PvPScalpel_BlitzLobbyScanMockMode == true then
-        local entries = type(PvPScalpel_BlitzLobbyScanMockEntries) == "table" and PvPScalpel_BlitzLobbyScanMockEntries or {}
-        local expectedLocalCount = type(config.expectedLocalCount) == "number" and config.expectedLocalCount or #entries
-        local mockBuffer = PvPScalpel_BuildBlitzLobbyBuffer(entries, config)
+        local mockEntries = type(PvPScalpel_BlitzLobbyScanMockEntries) == "table" and PvPScalpel_BlitzLobbyScanMockEntries or {}
+        local allyEntries = type(mockEntries.ally) == "table" and mockEntries.ally or {}
+        local enemyEntries = type(mockEntries.enemy) == "table" and mockEntries.enemy or {}
+        local expectedAllyCount = type(config.expectedAllyCount) == "number" and config.expectedAllyCount or #allyEntries
+        local expectedEnemyCount = type(config.expectedEnemyCount) == "number" and config.expectedEnemyCount or #enemyEntries
+        local expectedLocalCount = expectedAllyCount + expectedEnemyCount
+        local resolvedCount = #allyEntries + #enemyEntries
+        local mockBuffer = PvPScalpel_BuildBlitzLobbyBuffer(allyEntries, config, enemyEntries)
         local bufferLength = string.len(mockBuffer or "")
         PvPScalpel_SetActiveBlitzLobbyScanSnapshot({
             display = true,
             format = type(config.format) == "string" and config.format or "Battleground Blitz",
             bracketName = type(config.bracketName) == "string" and config.bracketName or "[Lobby Scan]",
             scanState = "MOCK",
+            scanPhase = "DONE",
             expectedLocalCount = expectedLocalCount,
-            joinedCount = expectedLocalCount,
-            resolvedCount = expectedLocalCount,
-            entryCount = #entries,
-            progressValue = expectedLocalCount,
+            expectedAllyCount = expectedAllyCount,
+            expectedEnemyCount = expectedEnemyCount,
+            joinedCount = resolvedCount,
+            joinedAllyCount = #allyEntries,
+            joinedEnemyCount = #enemyEntries,
+            resolvedCount = resolvedCount,
+            resolvedAllyCount = #allyEntries,
+            resolvedEnemyCount = #enemyEntries,
+            entryCount = resolvedCount,
+            allyEntryCount = #allyEntries,
+            enemyEntryCount = #enemyEntries,
+            progressValue = resolvedCount,
             failureReason = nil,
             buffer = mockBuffer,
             bufferLength = bufferLength,
         })
-        PvPScalpel_LogBlitzLobbyScanState(config, "MOCK", expectedLocalCount, expectedLocalCount, #entries, bufferLength, nil)
+        PvPScalpel_LogBlitzLobbyScanState(config, "MOCK", resolvedCount, resolvedCount, resolvedCount, bufferLength, nil)
         return
     end
 
@@ -1223,11 +1610,40 @@ PvPScalpel_RefreshBlitzLobbyScanWindow = function()
 
     PvPScalpel_ExpireTimedOutBlitzLobbyInspect()
 
-    local entries, joinedCount, resolvedCount = PvPScalpel_CollectBlitzLobbyRoster()
-    local expectedLocalCount = type(config.expectedLocalCount) == "number" and config.expectedLocalCount or 1
+    local allyEntries, allyJoinedCount, allyResolvedCount = PvPScalpel_CollectBlitzLobbyRoster()
+    local expectedAllyCount = type(config.expectedAllyCount) == "number" and config.expectedAllyCount
+        or (type(config.expectedLocalCount) == "number" and config.expectedLocalCount or 1)
+    local expectedEnemyCount = type(config.expectedEnemyCount) == "number" and config.expectedEnemyCount or 0
+    local allyReady = PvPScalpel_IsFullResolvedTeam(allyJoinedCount, allyResolvedCount, #allyEntries, expectedAllyCount)
+    local enemyEntries = {}
+    local enemyJoinedCount = 0
+    local enemyResolvedCount = 0
+    if allyReady and expectedEnemyCount > 0 then
+        enemyEntries, enemyJoinedCount, enemyResolvedCount = PvPScalpel_CollectBlitzEnemyLobbyRoster(config)
+    else
+        PvPScalpel_UpdateBlitzEnemySettledState(config, false, nil, 0)
+    end
+
+    local enemySettled = PvPScalpel_UpdateBlitzEnemySettledState(config, allyReady, enemyEntries, enemyResolvedCount)
+    local expectedLocalCount = expectedAllyCount + expectedEnemyCount
+    if expectedLocalCount <= 0 then
+        expectedLocalCount = expectedAllyCount
+    end
+    local joinedCount = allyJoinedCount + enemyJoinedCount
+    local resolvedCount = allyResolvedCount + enemyResolvedCount
+    local entryCount = #allyEntries + #enemyEntries
     local progressValue = math.max(0, math.min(resolvedCount, expectedLocalCount))
-    local liveBuffer = PvPScalpel_BuildBlitzLobbyBuffer(entries, config)
-    local state, failureReason = PvPScalpel_ComputeBlitzLobbyScanState(config, joinedCount, resolvedCount, #entries)
+    local liveBuffer = PvPScalpel_BuildBlitzLobbyBuffer(allyEntries, config, enemyEntries)
+    local scanPhase = allyReady and (enemySettled and "DONE" or "ENEMY") or "ALLY"
+    local state, failureReason = PvPScalpel_ComputeBlitzLobbyScanState(config, {
+        allyJoinedCount = allyJoinedCount,
+        allyResolvedCount = allyResolvedCount,
+        allyEntryCount = #allyEntries,
+        enemyJoinedCount = enemyJoinedCount,
+        enemyResolvedCount = enemyResolvedCount,
+        enemyEntryCount = #enemyEntries,
+        enemySettled = enemySettled,
+    })
     if state == "READY" then
         PvPScalpel_ClearBlitzLobbyScanFailure()
         failureReason = nil
@@ -1239,16 +1655,25 @@ PvPScalpel_RefreshBlitzLobbyScanWindow = function()
         format = type(config.format) == "string" and config.format or "Battleground Blitz",
         bracketName = type(config.bracketName) == "string" and config.bracketName or "[Lobby Scan]",
         scanState = displayedState,
+        scanPhase = scanPhase,
         expectedLocalCount = expectedLocalCount,
+        expectedAllyCount = expectedAllyCount,
+        expectedEnemyCount = expectedEnemyCount,
         joinedCount = joinedCount,
+        joinedAllyCount = allyJoinedCount,
+        joinedEnemyCount = enemyJoinedCount,
         resolvedCount = resolvedCount,
-        entryCount = #entries,
+        resolvedAllyCount = allyResolvedCount,
+        resolvedEnemyCount = enemyResolvedCount,
+        entryCount = entryCount,
+        allyEntryCount = #allyEntries,
+        enemyEntryCount = #enemyEntries,
         progressValue = progressValue,
         failureReason = failureReason,
         buffer = liveBuffer,
         bufferLength = bufferLength,
     })
-    PvPScalpel_LogBlitzLobbyScanState(config, displayedState, joinedCount, resolvedCount, #entries, bufferLength, failureReason)
+    PvPScalpel_LogBlitzLobbyScanState(config, displayedState, joinedCount, resolvedCount, entryCount, bufferLength, failureReason)
 end
 
 local function PvPScalpel_UpdateBlitzLobbyScanWatcherLifecycle()
