@@ -103,5 +103,7 @@ function PvPScalpel_Slugify(text)
         :lower()
         :gsub(" ", "-")
 
+
+    if text == "cultedela-rivenoire" then return "culte-de-la-rive-noire" end
     return text
 end
