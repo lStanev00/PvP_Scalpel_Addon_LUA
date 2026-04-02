@@ -47,7 +47,10 @@ local PvPScalpel_ExactRealmSlugMap = {
     ["ashenvale"] = "ashenvale",
     ["cultedela-rivenoire"] = "culte-de-la-rive-noire",
     ["culte de la rive noire"] = "culte-de-la-rive-noire",
+    ["cultedelarivenoire"] = "culte-de-la-rive-noire",
     ["Culte de la Rive noire"] = "culte-de-la-rive-noire",
+    ["La Croisade écarlate"] = "la-croisade-écarlate",
+    ["la-croisadeécarlate"] = "la-croisade-écarlate",
     -- ["бое"]
 }
 
