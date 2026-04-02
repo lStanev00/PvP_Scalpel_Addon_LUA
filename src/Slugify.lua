@@ -40,6 +40,9 @@ local PvPScalpel_ExactRealmSlugMap = {
     ["борейская тундра"] = "borean-tundra",
     ["area 52"] = "area-52",
     ["area52"] = "area-52",
+    ["ясеневыйлес"] = "ashenvale",
+    ["ясеневый лес"] = "ashenvale",
+    ["ashenvale"] = "ashenvale",
     -- ["бое"]
 }
 
